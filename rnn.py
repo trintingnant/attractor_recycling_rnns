@@ -35,7 +35,9 @@ class RNN(nn.Module):
 				
 		self.net_size = params["recurrent_size"]
 
+		
 		#set initial network state
+
 		self.init_hidden = nn.Parameter(torch.Tensor(1, params["recurrent_size"]))
 		with torch.no_grad():
 			#set scale of IC
@@ -53,6 +55,7 @@ class RNN(nn.Module):
 
 				init_hidden = np.zeros((1, params["recurrent_size"]))
 				self.init_hidden = self.init_hidden.copy_(torch.from_numpy(init_hidden))
+		
 
 	def forward(self, input_, init_state=None):
 
@@ -70,10 +73,7 @@ class RNN(nn.Module):
 
 		"""
 		
-
 		batch_size, trial_len, _ = input_.shape
-
-
 		outs = torch.zeros(batch_size, trial_len, self.params["output_size"], dtype=torch.float32)
 		rates = torch.zeros(batch_size, trial_len, self.params["recurrent_size"], dtype=torch.float32)
 	
@@ -108,10 +108,9 @@ class RNNCell(nn.Module):
 		self.init_hidden = nn.Parameter(torch.Tensor(1, params["recurrent_size"]))
 		
 		#These will not be trained for now:
-
 		self.w_out_scale.requires_grad = False
 		self.w_in_scale.requires_grad = False
-		self.init_hidden.requires_grad = True
+		self.init_hidden.requires_grad = False
 
 		if params['train_w_out'] == False:
 			self.w_out.requires_grad = False
@@ -311,6 +310,8 @@ class MeanFieldRNNCell(nn.Module):
 
 	def __init__(self, params):
 		super(MeanFieldRNNCell, self).__init__()
+
+		self.params = params
 		self.nonlinearity = set_nonlinearity(params["nonlinearity"])
 		self.out_nonlinearity = set_nonlinearity(params["out_nonlinearity"])
 
@@ -328,19 +329,24 @@ class MeanFieldRNNCell(nn.Module):
 		self.weights = nn.Parameter(torch.Tensor(params["n_pops"]))
 		self.weights.requires_grad = False
 
-		
-		covs = np.zeros(
-				(self.num_loadings, 
-		  		self.num_loadings, 
-				params["n_pops"]
-				), dtype=np.float32
-		)
-
 		#set covariance matrices...
-		self.covs = nn.Parameter(torch.Tensor(*covs))
+		lr_cov = params.get("lr_cov", None)
+		covs = np.zeros(
+			(self.num_loadings, 
+			self.num_loadings, 
+			params["n_pops"]
+			),
+			dtype=np.float32
+			)
+	
+		self.covs = nn.Parameter(torch.Tensor(*covs.shape))
+
 		#...and corresponding cholesky decompositions
+		chols = np.zeros_like(covs)
 		self.chols = nn.Parameter(torch.Tensor(*covs.shape))
 
+		#MEMO: seems a bit redundant...but could be useful down the road
+		
 		with torch.no_grad():
 			
 			#set weights with balanced pops 
@@ -351,17 +357,28 @@ class MeanFieldRNNCell(nn.Module):
 			w_out = np.ones((params["rank"], params["n_pops"])) / params["rank"]*params["n_pops"]
 			self.w_out.copy_(torch.from_numpy(w_out))
 
-			#set covs & chols interactively via @classmethods:
-			self.covs.copy_(torch.zeros(*covs))
-			self.chols.copy_(torch.zeros(*covs))
+			if lr_cov is not None:
+				
+				for i in range(covs.shape[2]):
+					cov = covs[:,:,i]
+					params.update({"lr_cov": build_covariance_from_tri(cov)})
+					_, chol = initialize_lr_connectivity(params, return_chol=True)
+					#Add some noise
+					chol += np.random.randn(*chol.shape)*cov_init_noise
+					chols[:,:,i] = chol
+					covs[:,:,i] = chol @ chol.T
 
-	def forward(self, input_, hidden_state, noise=0):
+			self.covs.copy_(torch.from_numpy(covs))
+			self.chols.copy_(torch.from_numpy(chols))
+
+
+	def forward(self, input_, hidden_state, noise=0, return_gains=False):
 
 		"""
 		Performs forward pass for meanfield equations
 
 		Args:
-			input_: torch.Tensor[batch_size x in_dim]
+			input_: torch.Tensor[1 x in_dim]
 			hidden_state: torch.Tensor[1 x rank+in_dim]
 			noise: noise intensity for additive noise
 
@@ -370,11 +387,7 @@ class MeanFieldRNNCell(nn.Module):
 			out: the corresponding network output
 
 		"""
-		#hidden variables
-		K = hidden_state[:, :self.rank]
-		#input variables
-		V = hidden_state[:, self.rank:]
-		
+
 		#start of ns
 		nidx = self.rank
 		#start of Is
@@ -382,55 +395,81 @@ class MeanFieldRNNCell(nn.Module):
 		#start of ws
 		Widx = 2*self.rank+self.in_dim
 
+		#hidden variables
+		K = hidden_state[:, :nidx]
+		#input variables
+		V = hidden_state[:, nidx:]
+
+
+
+
+		"""
+		MEMO:
+			l := batch
+			k := population
+			i,j := regular indices
+		"""
+
+
 		#GAINS:
-		#recurrent
-		gains = torch.einsum('iik, ji -> jik', self.chols[:nidx, nidx:Iidx, :], K**2)
-		#input
-		gains += torch.einsum('iik, ji -> jik', self.chols[Iidx:Iidx+Widx, Iidx:Widx,:], V**2)
-		gains = self.compute_gains(gains, mode='approx')
-		"""
 		gains = self.compute_gains(
-			torch.einsum('iik, ik -> k', self.chols[:nidx, nidx:Iidx, :], K**2) +
-			torch.einsum('iik, ik -> k' self.chols[Iidx:Iidx+Widx, Iidx:Widx,:], V**2),
-			mode='approx'
-		)
+				torch.sum(
+					torch.hstack(
+					(
+					torch.einsum('...iik, ...li -> ...lik', self.covs[Iidx:Widx, Iidx:Widx,:], V**2),
+					torch.einsum('...iik, ...li -> ...lik', self.covs[:nidx, :nidx, :], K**2)
+					)
+					), axis=1
+				), mode='approx'
+			)
 
-		rec_input = torch.sum(
-			self.weights *
-			(torch.einsum('ijk, jk -> ik', self.chols[nidx:Iidx, :nidx,:], K) +
-			torch.einsum('ijk, jk -> ik', self.chols[Iidx:Widx, Iidx:Widx,:], V)
-			),
-			axis=1
-		)
-
-		"""
-
-		#recurrent input
-		rec_input = torch.einsum('ijk, j -> ik', self.chols[nidx:Iidx, :nidx,:], K)
-		#input
-		rec_input += torch.einsum('ijk, j -> ik', self.chols[Iidx:Widx, Iidx:Widx,:], V)
-		rec_input *= self.weights
-
-		K_new = (1 - self.alpha) * K + self.alpha * (gains * rec_input).sum(axis=1)
+		
+		#RECURRENT INPUT: 
+		rec_input = torch.hstack(
+    						(torch.einsum('...ijk, ...lj -> ...lik', self.covs[nidx:Iidx, :nidx,:], K),
+     						torch.einsum('...ijk, ...lj -> ...lik', self.covs[Iidx:Widx, Iidx:Widx,:], V) 
+     						)
+						)
+		
+		rec_input *= self.weights * gains
+		
+		K_new = (1 - self.alpha) * K + self.alpha * rec_input.sum(axis=2)[:,:nidx]
 		V_new = (1 - self.alpha) * V + self.alpha * input_ 
 
+		rates = torch.hstack((K_new, V_new))
+		
 		#want to return output?
 		"""
-		w_out = torch.einsum('ijk, jk -> ik', self.chols[:nidx, Widx:,:], K)
-		w_out += torch.einsum('ijk, jk -> ik', self.chols[Iidx:Widx, Widx,:], V)
-		out = w_out * gains * self.weights
+		w_out = torch.hstack(
+						(torch.einsum('...ijk, ...li -> ...lik', self.covs[:nidx, Widx:,:], K),
+	 					torch.einsum('...ijk, ...li -> ...lik', self.covs[Iidx:Widx, Widx:,:], V)
+	 					)
+		)
 		"""
 
-		return torch.cat((K_new, V_new), 1)
+		w_out = torch.sum(
+					(torch.einsum('ij, jkl -> kl',  K_new, self.covs[:nidx, Widx:, :]) +
+					 torch.einsum('ij, jkl -> kl', V_new, self.covs[Iidx:Widx, Widx:, :])
+					 ), axis=1
+					)
+		
+		if self.out_nonlinearity == "tanh":
+			w_out *= self.weights * gains
+			
+		else:
+			w_out *= self.weights
+		
+			
+		return rates, w_out
 
-	def compute_gains(self, x):
+	def compute_gains(self, x, mode="approx"):
 		"""
 		computes gains for populations from latent variables
 		"""
-		return 1/ torch.sqrt(1 + torch.pi / 2 * x)
+		return 1/ torch.sqrt(1 + (torch.pi / 2) * x)
 	
 	@classmethod
-	def init_from_model(cls, model, pops, cov_init_noise=0, **kwargs):
+	def init_from_model(cls, model, pops, cov_init_noise, **kwargs):
 		"""
 		initialises a mean MeanFieldRNN from a different cell type (right now, only LRRNNCell is supported)
 		"""
@@ -438,7 +477,7 @@ class MeanFieldRNNCell(nn.Module):
 		params = dict(model.params)
 		params["mean_field"] = True
 		params["n_pops"] = len(set(pops))
-
+		#change to latent variable space
 		params["recurrent_size"] = params["rank"] + params["input_size"]
 
 		center = kwargs.get("center", False)
@@ -448,25 +487,29 @@ class MeanFieldRNNCell(nn.Module):
 		conn_vecs = get_model_conn_vecs(model, 
 								  		center=center, 
 										orth_I=orth_I, 
-										orth_n=orth_n,
-										return_labels=False)
+										orth_n=orth_n
+										)
 		
 		covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
-		covs = np.array([build_covariance_from_tri(covs[:,:,i]) for i in range(params["n_pops"])])
+		chols = np.zeros_like(covs)
 		
-		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(params["n_pops"])])
-
-		#corrupt with small amplitude noise
-		chols += np.random.randn(*chols.shape) * cov_init_noise
-		
-		meanfield = RNN(params)
+		for i in range(covs.shape[2]):
+			cov = covs[:,:,i]
+			params.update({"lr_cov": build_covariance_from_tri(cov)})
+			_, chol = initialize_lr_connectivity(params, return_chol=True)
+			#Add some noise
+			chol += np.random.randn(*chol.shape)*cov_init_noise
+			chols[:,:,i] = chol
+			covs[:,:,i] = chol @ chol.T
+			
+		#clear lr_cov
+		params.update({"lr_cov": None})
+		meanfield_model = RNN(params)
 		with torch.no_grad():
-
-			#Keep L.T, not L:
-			meanfield.chols.copy_(torch.from_numpy(chols.transpose(1,0,2)))
-			meanfield.covs.copy_(torch.from_numpy(chols @ chols.T))
-				   		
-		return meanfield
+			meanfield_model.rnn.chols.copy_(torch.from_numpy(chols))
+			meanfield_model.rnn.covs.copy_(torch.from_numpy(covs))
+		
+		return meanfield_model
 	
 	@classmethod
 	def init_from_covs(cls, params, covs, cov_init_noise=0):
@@ -479,8 +522,6 @@ class MeanFieldRNNCell(nn.Module):
 			meanfield.covs.copy_(torch.from_numpy(chols @ chols.T))
 
 		return meanfield
-		
-
 
 def load_rnn(inPath: str):
 
@@ -601,26 +642,6 @@ def resample(model, N, pops=None):
         model_resampled.rnn.w_out.set_(torch.from_numpy(w_out.T).float())
 
     return model_resampled
-
-def compute_gains(x, mode='approx'):
-	"""
-	Computes the gains for LR_RNN models, either (for LRRNN_Cells) by sampling, or by using approximation from @Pals et al. 2023
-	
-	Args:
-
-		x: torch.Tensor 
-		mode: either "approx" or "sample"
-
-	Returns:
-		gain-modulated activities of neurons ("sample") or gain-modulated latent variables ("approx")
-
-	TODO: implement "sample" functionality
-	"""
-
-	if mode=='approx':
-		return 1 / torch.sqrt(1 + torch.pi/2 * x)
-
-
 
 
 

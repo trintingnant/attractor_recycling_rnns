@@ -4,8 +4,7 @@ import os, pickle as pkl
 from typing import Optional
 from sklearn.decomposition import PCA
 import scipy.cluster.hierarchy as sch
-from copy import copy
-
+from copy import copy, deepcopy
 
 
 """
@@ -280,7 +279,7 @@ def get_model_conn_vecs(model,
 						orth_n=False, 
 						return_labels=False):
 	
-	from copy import deepcopy
+	from copy import copy, deepcopy
 
 	"""returns the the 2R + N_in + N_out connectivity params for a low rank model
 	stack in preparation for GMM fit
@@ -289,31 +288,36 @@ def get_model_conn_vecs(model,
 	conn_vecs = np.zeros((2*model.rnn.rank
                       + model.rnn.params["input_size"]
                       + model.rnn.params["output_size"], 
-                      model.rnn.net_size))
+                      model.rnn.net_size),
+					  dtype='float32')
 
 	m, n, w_in, w_out = get_lr_net_params(model)
 	
 	#keep only the orthogonal part of I -> no drive along m
 	#Ref: Valente 2019, Dubreuil Valente et al. 2022, etc.
-	if orth_I:
-		#get input directions
-		for i in range(w_in.shape[0]):
-			vecs = np.vstack((m.T, w_in[i,:]))
-		I_orth = gram_schmidt_vecs(vecs)
-		w_in = I_orth[1:,:]
+	w = deepcopy(w_in)
+	print(w.shape)
 	
-	#Only keep parallel part of n:
+	if orth_I:
+		w = deepcopy(w_in)
+		for idx, inI in enumerate(w_in):
+			w = deepcopy(w_in)
+			vecs = np.vstack((m.T, inI))
+			w[idx,:] = np.array(gram_schmidt_vecs(vecs))[-1,:]
+
 	if orth_n:
-		orth_n_vec = deepcopy(n)
-		for idx, nI in enumerate(orth_n_vec):
+		nn = deepcopy(n)
+		for idx, nI in enumerate(nn):
 			vecs = np.vstack((m.T, w_in, nI))
-			nI_orth = gram_schmidt_vecs(vecs)[-1,:]
-			orth_n_vec[idx, :] = nI_orth
+			nn[idx, :] = np.array(gram_schmidt_vecs(vecs))[-1,:]
+
+		n -= nn 
+
 
 	conn_vecs[:model.rnn.rank,:] = m.T
 	conn_vecs[model.rnn.rank: 2*model.rnn.rank,:] = n
-	conn_vecs[2*model.rnn.rank:2*model.rnn.rank + model.rnn.params["input_size"],:] = w_in
-	conn_vecs[2*model.rnn.rank + model.rnn.params["input_size"]:,:] = w_out.T 
+	conn_vecs[2*model.rnn.rank:2*model.rnn.rank + model.rnn.params["input_size"],:] = w
+	conn_vecs[2*model.rnn.rank + model.rnn.params["input_size"]:,:] = w_out.T
 
 	if center:
 		conn_vecs -= conn_vecs.mean(axis=1, keepdims=True)
@@ -338,12 +342,16 @@ def get_overlap_matrix_all_params(conn_vecs, pops=None):
 	ov_mat = np.zeros((num_params, num_params, len(set(pops))))
 
 	for elem in set(pops):
-		print(elem)
 		_, counts = np.unique(pops, return_counts=True)
 		mask = np.where(pops==elem)[0]
 		for i in range(num_params):
 			for j in range(i, num_params):
-				ov_mat[i,j, elem]= (conn_vecs[i,mask] * conn_vecs[j, mask]).sum() / counts[elem]
+				cov = np.sum(
+					(conn_vecs[i, mask] - conn_vecs[i, mask].mean()) *
+		   			(conn_vecs[j, mask] - conn_vecs[j, mask].mean())
+				)
+						   
+				ov_mat[i,j, elem] = cov / counts[elem]
 
 	return ov_mat
 
@@ -402,15 +410,6 @@ def build_model_dataframe(model, pops):
 	df['pops'] = pops
 	
 	return df
-
-
-
-
-
-
-
-
-
 
 
 
