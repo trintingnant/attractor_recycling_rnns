@@ -7,8 +7,16 @@ import rnn
 from rnn import RNN
 from default_params import default_params
 import numpy as np
-from FixedPoint import FixedPoint 
 from sklearn.decomposition import PCA
+
+
+#PATHS
+import sys
+sys.path.append('../FixPointSearch')
+from FixPointSearch.FixedPoint import FixedPoint 
+
+#add style sheets to path
+sys.path.append('../styles')
 
 NUM_ANGLES = 25
 

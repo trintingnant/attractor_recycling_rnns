@@ -328,16 +328,17 @@ class MeanFieldRNNCell(nn.Module):
 		self.weights = nn.Parameter(torch.Tensor(params["n_pops"]))
 		self.weights.requires_grad = False
 
-		#set covariance matrices
-		covs = np.zeros(
-			(self.num_loadings, 
-			self.num_loadings, 
-			params["n_pops"]
-			),
-			dtype=np.float32
-			)
 		
-		#and corresponding cholesky decompositions
+		covs = np.zeros(
+				(self.num_loadings, 
+		  		self.num_loadings, 
+				params["n_pops"]
+				), dtype=np.float32
+		)
+
+		#set covariance matrices...
+		self.covs = nn.Parameter(torch.Tensor(*covs))
+		#...and corresponding cholesky decompositions
 		self.chols = nn.Parameter(torch.Tensor(*covs.shape))
 
 		with torch.no_grad():
@@ -350,8 +351,9 @@ class MeanFieldRNNCell(nn.Module):
 			w_out = np.ones((params["rank"], params["n_pops"])) / params["rank"]*params["n_pops"]
 			self.w_out.copy_(torch.from_numpy(w_out))
 
-			#bit awkward. Requires post-hoc setting. Let's see. 
-			self.chols.copy_(torch.from_numpy(covs))
+			#set covs & chols interactively via @classmethods:
+			self.covs.copy_(torch.zeros(*covs))
+			self.chols.copy_(torch.zeros(*covs))
 
 	def forward(self, input_, hidden_state, noise=0):
 
@@ -428,7 +430,7 @@ class MeanFieldRNNCell(nn.Module):
 		return 1/ torch.sqrt(1 + torch.pi / 2 * x)
 	
 	@classmethod
-	def init_from_model(cls, model, pops):
+	def init_from_model(cls, model, pops, cov_init_noise=0, **kwargs):
 		"""
 		initialises a mean MeanFieldRNN from a different cell type (right now, only LRRNNCell is supported)
 		"""
@@ -437,15 +439,31 @@ class MeanFieldRNNCell(nn.Module):
 		params["mean_field"] = True
 		params["n_pops"] = len(set(pops))
 
-		conn_vecs = get_model_conn_vecs(model, center=True)
-		covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
+		params["recurrent_size"] = params["rank"] + params["input_size"]
 
-		#Cholesky decomposition: use L.T instead of L
-		mf_model = RNN(params)
+		center = kwargs.get("center", False)
+		orth_I = kwargs.get("orth_I", False)
+		orth_n = kwargs.get("orth_n", False)
+
+		conn_vecs = get_model_conn_vecs(model, 
+								  		center=center, 
+										orth_I=orth_I, 
+										orth_n=orth_n,
+										return_labels=False)
+		
+		covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
+		covs = np.array([build_covariance_from_tri(covs[:,:,i]) for i in range(params["n_pops"])])
+		
+		#Keep L.T, not L:
+		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(params["n_pops"])])
+		
+		meanfield = RNN(params)
 		with torch.no_grad():
-			mf_model.rnn.chols.copy_(torch.from_numpy(covs.transpose(1,0,2)))
-							
-		return mf_model
+			meanfield.copy_(torch.from_numpy(covs))
+			#Keep L.T, not L:
+			meanfield.copy_(torch.from_numpy(chols.transpose(1,0,2)))
+				   		
+		return meanfield
 
 
 def load_rnn(inPath: str):
