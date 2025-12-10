@@ -454,16 +454,32 @@ class MeanFieldRNNCell(nn.Module):
 		covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
 		covs = np.array([build_covariance_from_tri(covs[:,:,i]) for i in range(params["n_pops"])])
 		
-		#Keep L.T, not L:
 		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(params["n_pops"])])
+
+		#corrupt with small amplitude noise
+		chols += np.random.randn(*chols.shape) * cov_init_noise
 		
 		meanfield = RNN(params)
 		with torch.no_grad():
-			meanfield.copy_(torch.from_numpy(covs))
+
 			#Keep L.T, not L:
-			meanfield.copy_(torch.from_numpy(chols.transpose(1,0,2)))
+			meanfield.chols.copy_(torch.from_numpy(chols.transpose(1,0,2)))
+			meanfield.covs.copy_(torch.from_numpy(chols @ chols.T))
 				   		
 		return meanfield
+	
+	@classmethod
+	def init_from_covs(cls, params, covs, cov_init_noise=0):
+
+		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(covs.shape[2])])
+		chols += np.random.rand(*chols.shape) * cov_init_noise
+		meanfield = RNN(params)
+		with torch.no_grad():
+			meanfield.chols.copy_(torch.from_numpy(chols.transpose(1,0,2)))
+			meanfield.covs.copy_(torch.from_numpy(chols @ chols.T))
+
+		return meanfield
+		
 
 
 def load_rnn(inPath: str):
