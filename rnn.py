@@ -514,6 +514,10 @@ class MeanFieldRNNCell(nn.Module):
 	@classmethod
 	def init_from_covs(cls, params, covs, cov_init_noise=0):
 
+		"""
+		Initialises MeanFieldRNN from covariance matrix
+		"""
+
 		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(covs.shape[2])]).transpose(1,2,0)
 		chols += np.random.rand(*chols.shape) * cov_init_noise
 		
@@ -608,41 +612,46 @@ def shuffle(model):
 	params["lr_cov"] = get_model_conn_vecs(model, return_labels=False)
 	return RNN(params)
 
-def resample(model, N, pops=None):
+def resample(model, N, pops=None, return_pops=False):
 
-    """
-    resample network to dimension N
-    ATTENTION: pops are the populations of the to-be-resampled model
-    NOT of the resampled model itself
-    """
-    
-    num_pops = extract_num_pops(pops)
-    params = copy(model.params)
-    r = params["rank"]
-    #old_size = params["recurrent_size"] -> only for scaling
-    params["recurrent_size"] = N
- 
-    
-    conn_vecs = get_model_conn_vecs(model, return_labels=False)
-    covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
-    num_connectivity_vecs = conn_vecs.shape[0]
+	"""
+	resample network to dimension N
+	ATTENTION: pops are the populations of the to-be-resampled model
+	NOT of the resampled model itself
+	"""
 
-    loadings = np.array([np.linalg.cholesky(covs[:,:,i].T) @ np.float32(np.random.randn(num_connectivity_vecs, int(N/num_pops))) for i in range(num_pops)])
-    loadings = np.hstack(loadings)
+	num_pops = extract_num_pops(pops)
+	params = copy(model.params)
+	r = params["rank"]
+	#old_size = params["recurrent_size"] -> only for scaling
+	params["recurrent_size"] = N
 
-    m = loadings[:r,:] 
-    n = loadings[r:2*r,:] 
-    w_in = loadings[2*r:2*r+2,:]
-    w_out = loadings[2*r+2:,:] 
-    model_resampled = RNN(params)
 
-    with torch.no_grad():
-        model_resampled.rnn.m.set_(torch.from_numpy(m.T).float()) 
-        model_resampled.rnn.n.set_(torch.from_numpy(n).float())
-        model_resampled.rnn.w_in.set_(torch.from_numpy(w_in).float())
-        model_resampled.rnn.w_out.set_(torch.from_numpy(w_out.T).float())
+	conn_vecs = get_model_conn_vecs(model, return_labels=False)
+	covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
+	num_connectivity_vecs = conn_vecs.shape[0]
 
-    return model_resampled
+	loadings = np.array([np.linalg.cholesky(covs[:,:,i].T) @ np.float32(np.random.randn(num_connectivity_vecs, int(N/num_pops))) for i in range(num_pops)])
+	loadings = np.hstack(loadings)
+
+	m = loadings[:r,:] 
+	n = loadings[r:2*r,:] 
+	w_in = loadings[2*r:2*r+2,:]
+	w_out = loadings[2*r+2:,:] 
+	model_resampled = RNN(params)
+
+	with torch.no_grad():
+		model_resampled.rnn.m.set_(torch.from_numpy(m.T).float()) 
+		model_resampled.rnn.n.set_(torch.from_numpy(n).float())
+		model_resampled.rnn.w_in.set_(torch.from_numpy(w_in).float())
+		model_resampled.rnn.w_out.set_(torch.from_numpy(w_out.T).float())
+
+	if return_pops:
+		pops_new = np.repeat(np.array(list(set(pops))), int(N/num_pops))
+		return model_resampled, pops_new
+		
+	else:
+		return model_resampled
 
 
 
