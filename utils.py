@@ -22,7 +22,7 @@ def initialize_w_rec(params):
 		/ np.sqrt(params["recurrent_size"])
 	
 	#TODO: add connectivity mask -> just for testing behaviour under
-	#different network topologies
+	#different network topologies. Ref: Herbert & Ostojic 2022
 	"""
 	if params.get('mask') and params['mask']:
 		mask = get_conn_mask(*w_rec.shape)
@@ -34,7 +34,6 @@ def initialize_w_rec(params):
 	#ii) we have inhibitory neurons
 
 	#Set to spectral radius:
-
 	if params["spectral_norm"]:
 		w_rec = (
 			params["spectral_radius"]
@@ -246,33 +245,6 @@ def get_lr_net_params(model):
 
 	return m, n, w_in, w_out
 
-def get_overlap_matrix(model):
-	"""obtain overlap matrix for low-rank RNNs"""
-
-	r = model.rnn.rank
-	N = model.rnn.net_size
-	m, n, _, _ = get_lr_net_params(model)
-	sov = np.zeros((r, r))
-	for i in range(r):
-		for j in range(r):
-			sov[i,j] = m[:,i] @ n[j,:] / N
-	return sov
-
-def get_input_correlation_matrix(model):
-	"""obtain the input correlation matrix for low-rank RNNs, i.e.
-	the matrix of overlaps between the input patterns
-	and the input-selection vectors n"""
-
-	r = model.rnn.rank
-	N = model.rnn.net_size
-	in_dim = model.params["input_size"]
-	_, n, w_in, _ = get_lr_net_params(model)
-	sni = np.zeros((in_dim, r))
-	for j in range(r):
-		sni[:,j] = w_in.dot(n[j,:]) / N
-
-	return sni
-
 def get_model_conn_vecs(model, 
 						orth_I=False, 
 						center=False,
@@ -332,6 +304,9 @@ def get_overlap_matrix_all_params(conn_vecs, pops=None):
 
 	"""obtains overlap matrix for all connectivity parameters, 
 	including inputs and outputs
+	ATTENTION: this will yield an upper triangular matrix for plotting interfacing
+	to obtain full covariances run the function below
+	TODO: should be integrated.
 	"""
 
 	num_params = conn_vecs.shape[0]
@@ -410,6 +385,72 @@ def build_model_dataframe(model, pops):
 	df['pops'] = pops
 	
 	return df
+
+
+def make_MF_covs_pop_dyn(cov_params):
+
+    """
+    Create covariance matrices for the model relying on population dynamix
+
+    Args:
+        cov_params: dictionary of covariance parameters
+    
+    Returns:
+        covs: covariance matrices
+
+    Here we have:
+        - Two populations implementing a counter-clockwise and clockwise rotation
+        with frequency w
+        - The activity in each population is modulated by the inputs, s.t.
+        variance of one input is high on each population -> saturation of non-lin.
+        - Covariance matrices are 8d
+        -Attention: make sure matrix is spd!
+        
+    """
+    sdM = cov_params["sdM"] #variance of ms (and ns)
+    sdR = cov_params["sdR"] #covariance of the diagonal elements -> set radius
+    sdOm = cov_params["sdOm"] #covariance of the off-diagonal elements -> set frequency (i.e. clockwise vs. counter-clockwise)
+    sdI = cov_params["sdI"] #variance of the respective inputs, one per pop
+    sdmW = cov_params["sdmW"] #covariance of the recurrent- and output directions
+    sdnI = cov_params["sdI"] #covariance between the input-selection and input vectors
+    sdnW = cov_params["sdnW"] #covariance between the input selection vectors and the ouputs.
+    sdW = cov_params["sdW"] #variance of the output vectors (should be roughly OOM as sdM)
+    
+    eps = 1e-2
+    
+    #Pop 1:
+    cov1 = np.array([[sdM, 0, sdR, sdOm, 0, 0, -sdmW, -sdmW],
+                    [0, sdM, -sdOm, sdR, 0, 0, -sdmW, sdmW],
+                    [sdR, -sdOm, sdM, 0, sdnI, sdnI, 0, -sdnW],
+                    [sdOm, sdR, 0, sdM, sdnI, sdnI, -sdnW, 0],
+                    [0, 0, sdnI, sdnI, sdI, 0, 0, 0],
+                    [0, 0, sdnI, sdnI, 0, sdI, 0, 0],
+                    [-sdmW, -sdmW, 0, -sdnW, 0, 0, sdW, 0],
+                    [-sdmW, sdmW, -sdmW, 0, 0, 0, 0, sdW]]
+                    )
+    
+    
+    cov2 = np.array([[sdM, 0, sdR, -sdOm, 0, 0, -sdmW, -sdmW],
+                    [0, sdM, sdOm, sdR, 0, 0, -sdmW, sdmW],
+                    [sdR, sdOm, sdM, 0, sdnI, sdnI, -sdnW, 0],
+                    [-sdOm, sdR, 0, sdM, sdnI, sdnI, 0, sdnW],
+                    [0, 0, sdnI, sdnI, sdI, 0, 0, 0],
+                    [0, 0, sdnI, sdnI, 0, sdI, 0, 0],
+                    [-sdmW, -sdmW, 0, -sdnW, 0, 0, sdW, 0],
+                    [-sdmW, sdmW, -sdmW, 0, 0, 0, 0, sdW]]
+                    )
+    
+
+    #condition matrices to be spd
+    if np.linalg.eigh(cov1)[0][0] < 0:
+        cov1 -= np.eye(cov1.shape[0])*(np.linalg.eigh(cov1)[0][0] - eps)
+
+    if np.linalg.eigh(cov2)[0][0] < 0:
+        cov2 -= np.eye(cov1.shape[0])*(np.linalg.eigh(cov2)[0][0] - eps)
+    
+    return np.dstack((cov1, cov2))
+
+
 
 
 
