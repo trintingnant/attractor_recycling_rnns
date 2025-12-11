@@ -117,7 +117,7 @@ def plot_multitask_net_response(model, trial, antitrial):
     axs[1].plot(antitarget, "-.", c="black", alpha=.5)
 
     axs[0].set_title('Task')
-
+    """
     axs[2].set_prop_cycle(color=['crimson', 'orange', 'silver', 'cornflowerblue'])
     axs[2].plot(rates[0,:,:].detach().numpy(), c="b", alpha=.1)
     axs[2].plot(antirates[0,:,:].detach().numpy(), c="r", alpha=.1)
@@ -130,6 +130,7 @@ def plot_multitask_net_response(model, trial, antitrial):
     #axs[i].axvline(15, ymin=-1, ymax=1, linestyle='--', c='black', label='mean')
     #axs[1].axvline(7, ymin=-1, ymax=1, linestyle='--', c='black')
     axs[2].set_xlabel(r'$time$')
+    """
 
     plt.tight_layout(w_pad=1.5, h_pad=1.5)
     plt.show() 
@@ -648,7 +649,17 @@ def plot_traj_similarity(model, inputs, base_idx=0, num_angles=NUM_ANGLES, trnst
     
     return ax
 
-def lower_triangular_heatmap(covs, eps=0.2, eps_var=2.0, figsize=None, dpi=100, fontsize=8, label_fs=6, numbers_fs=6, axs=None, labels=None):
+def lower_triangular_heatmap(covs, 
+                             eps=0.2, 
+                             eps_var=2.0, 
+                             figsize=None, 
+                             dpi=100, 
+                             fontsize=8, 
+                             label_fs=6, 
+                             numbers_fs=6, 
+                             axs=None, 
+                             labels=None,
+                             put_text=False):
     
     _, num_features, num_pops = covs.shape
     if axs is None:
@@ -692,6 +703,17 @@ def lower_triangular_heatmap(covs, eps=0.2, eps_var=2.0, figsize=None, dpi=100, 
 
                 im = axs[popIdx].imshow(tri_mat_flattened, cmap='coolwarm')
                 imv = axs[popIdx].imshow(mask_variance, cmap='Greys')
+
+                if put_text:
+
+                    for (i,j) in zip(*np.triu_indices_from(covs[:,:,popIdx])):
+                        #print only most significant values:
+                        if j > i and np.abs(tri_mat_flattened[i,j]) > np.percentile(np.abs(covs[:,:, popIdx]), 70):
+                            axs[popIdx].text(j,i, "{:.1f}".format(tri_mat_flattened[i,j]), ha="center", va="center", fontsize='xx-small')
+
+                    for i in range(covs.shape[0]):
+                        if mask_variance[i,i] != 0.0:
+                            axs[popIdx].text(i,i, "{:.1f}".format(mask_variance[i,i]), c="white", ha="center", va="center", fontsize='xx-small')
 
                 if labels is not None:
                     

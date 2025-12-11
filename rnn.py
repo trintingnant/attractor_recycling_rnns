@@ -497,12 +497,12 @@ class MeanFieldRNNCell(nn.Module):
 			cov = covs[:,:,i]
 			params.update({"lr_cov": build_covariance_from_tri(cov)})
 			_, chol = initialize_lr_connectivity(params, return_chol=True)
-			#Add some noise
+			
 			chol += np.random.randn(*chol.shape)*cov_init_noise
 			chols[:,:,i] = chol
 			covs[:,:,i] = chol @ chol.T
 			
-		#clear lr_cov
+		#clear lr_cov -> bit awkward!
 		params.update({"lr_cov": None})
 		meanfield_model = RNN(params)
 		with torch.no_grad():
@@ -514,12 +514,13 @@ class MeanFieldRNNCell(nn.Module):
 	@classmethod
 	def init_from_covs(cls, params, covs, cov_init_noise=0):
 
-		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(covs.shape[2])])
+		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(covs.shape[2])]).transpose(1,2,0)
 		chols += np.random.rand(*chols.shape) * cov_init_noise
+		
 		meanfield = RNN(params)
 		with torch.no_grad():
-			meanfield.chols.copy_(torch.from_numpy(chols.transpose(1,0,2)))
-			meanfield.covs.copy_(torch.from_numpy(chols @ chols.T))
+			meanfield.rnn.chols.copy_(torch.from_numpy(chols))
+			meanfield.rnn.covs.copy_(torch.from_numpy(covs))
 
 		return meanfield
 
@@ -561,7 +562,7 @@ def save_rnn(outPath: str,
 		os.mkdir(outPath)
 
 	#Safeguard against overwriting
-	if os.path.isdir(outPath):
+	elif os.path.isdir(outPath):
 		outPath += "_2"
 
 	model_params_file = os.path.join(outPath, "model_params.pkl")
