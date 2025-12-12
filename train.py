@@ -112,11 +112,34 @@ def train_rnn(model: RNN,
 		grads = []
 		params = []
 
+	reg_fns = []
+	reg_lambdas = []
+	if training_params["use_l1_reg"]:
+		reg_fns.append(l1_loss)
+		reg_lambdas.append(training_params["lambda_l1"])
+
+	if training_params["use_l2_reg"]:
+		reg_fns.append(l2_loss)
+		reg_lambdas.append(training_params["lambda_l2"])
+
+	if training_params["use_l1_cov_reg"]:
+		#only makes sense for MF models
+		assert(model.params["mean_field"]==True)
+		reg_fns.append(l1_cov_loss)
+		reg_lambdas.append(training_params["lambda_l1_cov"])
+
+	if training_params["use_l2_cov_reg"]:
+		#only makes sense for MF models
+		assert(model.params["mean_field"]==True)
+		reg_fns.append(l2_cov_loss)
+		reg_lambdas.append(training_params["lambda_l2_cov"])
+
 	start_time = time.time()
 	loss_prev = np.infty
 	model.train() 
 
 	losses = []
+	reg_losses = []
 
 	for i in range(n_epochs):
 
@@ -140,9 +163,17 @@ def train_rnn(model: RNN,
 
 			#gradient descent
 			loss = loss_func(y_pred, y, m)
+			print(len(reg_fns))
+			if len(reg_fns) != 0:
+				reg_losses = torch.tensor(
+					[reg_fn(rates[:,1:], covs=model.rnn.covs)
+	 				for reg_fn in reg_fns
+					]
+				)
+				loss += (reg_losses * reg_lambdas).sum()
+				
 			loss.backward()
 
-			
 			#log `raw` (!!!) grads and params every x steps
 			if log_raw_data :
 				if i % RAW_LOG_FREQ == 0:
@@ -199,6 +230,27 @@ def train_rnn(model: RNN,
 	#NOTE: this logging method is more or less whack. Can build logger?
 
 
+"""Define Regularizers"""
+
+def l2_loss(rates, **kwargs):
+	"""L2 loss on single unit firing rates"""
+	return torch.mean(rates**2)
+
+def l1_loss(rates, **kwargs):
+	"""L1 loss on single unit firing rates"""
+	return torch.mean(rates.abs())
+
+def l2_cov_loss(rates, **kwargs):
+	"""Promotes covariance matrices with small entries"""
+	covs = kwargs.get("covs", None)
+	l2_loss = torch.mean(covs**2)
+	return l2_loss.squeeze()
+
+def l1_cov_loss(rates, **kwargs):
+	"""Promotes covariance matrices with lots of 0s"""
+	covs = kwargs.get("covs", None)
+	l1_loss = torch.mean(covs.abs())
+	return l1_loss.squeeze()
 
 
 
