@@ -32,7 +32,12 @@ def fit_gmm(
 
     return label, model 
 
-def clustering_stability(X, model, n_iter, random_state=None):
+def clustering_stability(X, 
+                         model, 
+                         n_iter, 
+                         normalise=True,
+                         normalisation_type="gaussian"
+                         ):
 
     """
     Computes the stability of clusterings.
@@ -41,6 +46,14 @@ def clustering_stability(X, model, n_iter, random_state=None):
     bootstrapped subsamples 'n_iter' times.
 
     adapted from: https://amueller.github.io/aml/04-model-evaluation/17-cluster-evaluation.html
+
+    Args:
+
+        X: array[recurrent_size x num_loadings] -> model connectivity vectors
+        model: like above, sklearn.mixture BayessianGaussianMixture or sklearn.mixture.GaussianMixture
+        n_iter: int -> number of bootstraps
+        normalise: bool -> whether to normamalise, default: True
+        normalisation_type: either 'gaussian' or 'uniform', distributions against which to compare clusterings
 
     """
 
@@ -69,7 +82,21 @@ def clustering_stability(X, model, n_iter, random_state=None):
             score = adjusted_rand_score(l[inter_], k[inter_])
             scores.append(score)
 
-    return np.mean(scores)
+    #normalise
+    if normalise:
+        assert(normalisation_type in ["gaussian", "uniform"], 
+               "Please provide a known normalisation type")
+        
+        if normalisation_type == "gaussian":
+            X_norm = np.random.randn(*X.shape)
+
+        else:
+            X_norm = (np.random.rand(*X.shape) -.5) * 2
+
+        norm_scores, _ = clustering_stability(X_norm, model=model, n_iter=n_iter, normalise=False)
+        scores = [(score - np.mean(norm_scores)) / np.std(norm_scores) for score in scores]
+        
+    return scores, np.mean(scores)
 
     
 
