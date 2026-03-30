@@ -4,7 +4,7 @@ import numpy as np
 import sys
 import os
 from utils import *
-from typing import Optional, Union
+from typing import List
 import pickle as pkl
 import pickle
 
@@ -20,24 +20,25 @@ class RNN(nn.Module):
 
 		super(RNN, self).__init__()
 		self.params = params
-		#default is vanilla full-rank Rnn
+		#default is vanilla full-rank RNN
 		low_rank = self.params.get("low_rank", False)
 		mean_field = self.params.get("mean_field", False)
+		use_hook = self.params.get("use_hooked", False)
 
 		if low_rank:
 			if mean_field:
-				self.rnn = MeanFieldRNNCell(params)
-			else: 
+				if use_hook:
+					self.rnn = HookedMeanFieldRNNCell(params)
+				else:
+					self.rnn = MeanFieldRNNCell(params)
+			else:
 				self.rnn = LowRankRNNCell(params)
 
 		else:
 			self.rnn = RNNCell(params)
 				
 		self.net_size = params["recurrent_size"]
-
-		
 		#set initial network state
-
 		self.init_hidden = nn.Parameter(torch.Tensor(1, params["recurrent_size"]))
 		with torch.no_grad():
 			#set scale of IC
@@ -74,15 +75,28 @@ class RNN(nn.Module):
 		"""
 		
 		batch_size, trial_len, _ = input_.shape
-		outs = torch.zeros(batch_size, trial_len, self.params["output_size"], dtype=torch.float32)
-		rates = torch.zeros(batch_size, trial_len, self.params["recurrent_size"], dtype=torch.float32)
+		outs = torch.zeros(batch_size, 
+					 trial_len, 
+					 self.params["output_size"], 
+					 dtype=torch.float32
+					 )
+		
+		rates = torch.zeros(batch_size, 
+					  trial_len, 
+					  self.params["recurrent_size"], 
+					  dtype=torch.float32
+					  )
 	
 		if init_state is None: 
 			hidden_t = torch.tile(self.init_hidden, dims=(batch_size, 1))
 		else:
 			hidden_t = init_state
 
-		noise = torch.randn(batch_size, trial_len, self.params["recurrent_size"]) * self.params["noise_amplitude"]
+		noise = torch.randn(batch_size, 
+					  trial_len, 
+					  self.params["recurrent_size"], 
+					  dtype=torch.float32
+					  ) * self.params["noise_amplitude"]
 
 		for idx, input_t in enumerate(input_.split(1, dim=1)): #split batch into single trials
 			hidden_t, out = self.rnn(input_t.squeeze(dim=1), hidden_t, noise[:, idx])
@@ -260,17 +274,16 @@ class LowRankRNNCell(nn.Module):
 		return self
 
 	def forward(self, input_, hidden_state, noise=0):
-
 		#like above but wíth normalised m and n switched in for the recurrent connectivity
-
 		rec_input = torch.matmul(
 			torch.matmul(
 				self.nonlinearity(hidden_state), self.n.t()), 
 				self.m.t()
 				) / self.net_size + \
 			self.w_in_scale * input_.matmul(self.w_in)
-
+		
 		noise_t = np.sqrt(2 * self.alpha) * noise
+
 		hidden_state = (1 - self.alpha) * hidden_state + self.alpha * rec_input + noise_t
 
 		#Network output:
@@ -305,7 +318,7 @@ class MeanFieldRNNCell(nn.Module):
 
 	"""
     Module for simulating and training Mean Fields
-	trains Covariance matrix directly
+	-> trains covariance matrix directly
 	"""
 
 	def __init__(self, params):
@@ -328,6 +341,7 @@ class MeanFieldRNNCell(nn.Module):
 		self.w_out = nn.Parameter(torch.Tensor(params["rank"], params["output_size"]))
 		self.weights = nn.Parameter(torch.Tensor(params["n_pops"]))
 		self.weights.requires_grad = False
+		self.cov_init_noise = params.get("cov_init_noise", 0)
 
 		#set covariance matrices...
 		lr_cov = params.get("lr_cov", None)
@@ -346,7 +360,6 @@ class MeanFieldRNNCell(nn.Module):
 		self.chols = nn.Parameter(torch.Tensor(*covs.shape))
 
 		#MEMO: seems a bit redundant...but could be useful down the road
-		
 		with torch.no_grad():
 			
 			#set weights with balanced pops 
@@ -360,13 +373,23 @@ class MeanFieldRNNCell(nn.Module):
 			if lr_cov is not None:
 				
 				for i in range(covs.shape[2]):
-					cov = covs[:,:,i]
+					cov = lr_cov[...,i]
 					params.update({"lr_cov": build_covariance_from_tri(cov)})
 					_, chol = initialize_lr_connectivity(params, return_chol=True)
 					#Add some noise
-					chol += np.random.randn(*chol.shape)*cov_init_noise
+					chol += np.random.randn(*chol.shape)*self.cov_init_noise
 					chols[:,:,i] = chol
 					covs[:,:,i] = chol @ chol.T
+
+			else: 
+
+				for i in range(covs.shape[2]): 
+					_, chol = initialize_lr_connectivity(params, return_chol=True)
+				
+					#Add some noise -> populations different
+					chol += np.random.randn(*chol.shape)*self.cov_init_noise
+					chols[...,i] = chol
+					covs[...,i] = chol @ chol.T
 
 			self.covs.copy_(torch.from_numpy(covs))
 			self.chols.copy_(torch.from_numpy(chols))
@@ -387,7 +410,7 @@ class MeanFieldRNNCell(nn.Module):
 			out: the corresponding network output
 
 		"""
-
+		
 		#start of ns
 		nidx = self.rank
 		#start of Is
@@ -399,9 +422,6 @@ class MeanFieldRNNCell(nn.Module):
 		K = hidden_state[:, :nidx]
 		#input variables
 		V = hidden_state[:, nidx:]
-
-
-
 
 		"""
 		MEMO:
@@ -425,28 +445,20 @@ class MeanFieldRNNCell(nn.Module):
 
 		
 		#RECURRENT INPUT: 
-		rec_input = torch.hstack(
+		rec_input = torch.stack(
     						(torch.einsum('...ijk, ...lj -> ...lik', self.covs[nidx:Iidx, :nidx,:], K),
-     						torch.einsum('...ijk, ...lj -> ...lik', self.covs[Iidx:Widx, Iidx:Widx,:], V) 
+     						torch.einsum('...ijk, ...lj -> ...lik', self.covs[nidx:Iidx, Iidx:Widx,:], V) 
      						)
 						)
-		
-		rec_input *= self.weights * gains
-		
-		K_new = (1 - self.alpha) * K + self.alpha * rec_input.sum(axis=2)[:,:nidx]
+		#print(self.covs[nidx:Widx, Iidx:Widx,:])
+		#adjust dims for batch
+		rec_input *= self.weights * gains.unsqueeze(dim=1)
+		K_new = (1 - self.alpha) * K + self.alpha * rec_input.sum(axis=(0,3))
 		V_new = (1 - self.alpha) * V + self.alpha * input_ 
 
 		rates = torch.hstack((K_new, V_new))
 		
 		#want to return output?
-		"""
-		w_out = torch.hstack(
-						(torch.einsum('...ijk, ...li -> ...lik', self.covs[:nidx, Widx:,:], K),
-	 					torch.einsum('...ijk, ...li -> ...lik', self.covs[Iidx:Widx, Widx:,:], V)
-	 					)
-		)
-		"""
-
 		w_out = torch.sum(
 					(torch.einsum('ij, jkl -> kl',  K_new, self.covs[:nidx, Widx:, :]) +
 					 torch.einsum('ij, jkl -> kl', V_new, self.covs[Iidx:Widx, Widx:, :])
@@ -465,16 +477,19 @@ class MeanFieldRNNCell(nn.Module):
 	def compute_gains(self, x, mode="approx"):
 		"""
 		computes gains for populations from latent variables
+		uses approximation from Pals et a. (2024) and Marshall (2025) -> 'tanh kinda looks like erf'
 		"""
 		return 1/ torch.sqrt(1 + (torch.pi / 2) * x)
 	
 	@classmethod
-	def init_from_model(cls, model, pops, cov_init_noise, **kwargs):
+	def init_from_model(cls, model, pops, cov_init_noise):
 		"""
 		initialises a mean MeanFieldRNN from a different cell type (right now, only LRRNNCell is supported)
 		"""
 
 		params = dict(model.params)
+		if pops is None:
+			pops = np.zeros(params["recurrent_size"], dtype=int)
 		params["mean_field"] = True
 		params["n_pops"] = len(set(pops))
 		#change to latent variable space
@@ -491,11 +506,11 @@ class MeanFieldRNNCell(nn.Module):
 										)
 		
 		covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
+		covs = np.array([proj_spd(covs[...,i]) for i in range(covs.shape[2])]).transpose(1,2,0)
 		chols = np.zeros_like(covs)
 		
 		for i in range(covs.shape[2]):
-			cov = covs[:,:,i]
-			params.update({"lr_cov": build_covariance_from_tri(cov)})
+			params.update({"lr_cov": build_covariance_from_tri(covs[...,i])})
 			_, chol = initialize_lr_connectivity(params, return_chol=True)
 			
 			chol += np.random.randn(*chol.shape)*cov_init_noise
@@ -512,21 +527,114 @@ class MeanFieldRNNCell(nn.Module):
 		return meanfield_model
 	
 	@classmethod
-	def init_from_covs(cls, params, covs, cov_init_noise=0):
+	def init_from_covs(cls, params, covs, cov_init_noise=0, **kwargs):
 
 		"""
 		Initialises MeanFieldRNN from covariance matrix
 		"""
 
-		chols = np.array([np.linalg.cholesky(covs[:,:,i]) for i in range(covs.shape[2])]).transpose(1,2,0)
-		chols += np.random.rand(*chols.shape) * cov_init_noise
+		params = dict(params)
+		params["low_rank"] = True 
+		params["mean_field"] = True
+		#will initialise hooked version if necessary:
+		params["use_hooked"] = kwargs.get("use_hooked", False)
+		#better here...
+		rank = int((covs.shape[1] - params["input_size"] - params["output_size"]) / 2)
+		params["rank"] = rank
+
+		#change to latent variable space
+		params["recurrent_size"] = rank + params["input_size"]
 		
+		if len(covs.shape) <= 2:
+			covs = np.expand_dims(covs, axis=2)
+		
+		params["n_pops"] = covs.shape[2]
+
+		#cholesky decomposition for spd-space projected cov matrix
+		chols = np.array([np.linalg.cholesky(proj_spd(covs[:,:,i])) for i in range(covs.shape[2])]).transpose(1,2,0)
+		chols += np.random.rand(*chols.shape) * cov_init_noise
+
+		#will initialise hooked version if necessary:
+		params["use_hooked"] = kwargs.get("use_hooked", False)
+
+		if params["use_hooked"]:
+			params["trainable_idxs"] = kwargs.get("trainable_idxs", None)
+			params["cov_mask"] = kwargs.get("cov_mask", None)
+
 		meanfield = RNN(params)
+
 		with torch.no_grad():
 			meanfield.rnn.chols.copy_(torch.from_numpy(chols))
 			meanfield.rnn.covs.copy_(torch.from_numpy(covs))
 
 		return meanfield
+
+class HookedMeanFieldRNNCell(MeanFieldRNNCell):
+
+	"""MeanField RNN Cell with masked gradients (implemented through hooks)"""
+
+	def __init__(self, params):
+
+		"""
+        Args:
+            cov_mask: Entry point for the hook: torch.Tensor[n_loadings, n_loadings, n_supports]
+            trainable_k: int → only first k entries along last dim trainable
+
+		NOTE: Mask will allow training an arbitray set of entries of the [n_loadings, n_loadings, num_pops]
+		covariance tensor, so it allows really fine-tuning the training process. Trainable_idxs is more of a 
+		quick-and-dirty approach, where anything [...,idx] is trained. Usually enough. 
+        """
+
+		super().__init__(params)
+		cov_mask = params.get("cov_mask", None)
+		trainable_idxs = params.get("trainable_idxs", None)
+	
+        # ---- Build mask ----
+		if cov_mask is not None:
+		
+			mask = cov_mask.float()
+
+		elif trainable_idxs is not None:
+			mask = torch.zeros_like(self.covs)
+			
+			#just to be sure:
+			idxs = torch.as_tensor(trainable_idxs, dtype=torch.long)
+			mask[:, :, idxs] = 1.0 #only x populations trainable
+
+		else:
+			#raise ValueError("Either mask or indeces need to be provided")
+			#don't raise Error, simply define default behaviour -> will be equivalent MeanFieldRNNCell
+			mask = torch.ones_like(self.covs)
+
+		self.mask = mask
+		#register the hook
+		self.covs.register_hook(self._mask_cov_grad)
+
+	def _mask_cov_grad(self, grad):
+		return grad * self.mask
+	
+
+class GaussianLRRNN(nn.Module):
+
+	"""Low rank rnn with prefixed population structure. Basic defs like in @Valente,
+	where all populations are transformations of a shared Gaussian basis
+
+	For now this is only implemented as a parent class for the hooked version, 
+	which allows to train populations separately
+	"""
+
+	def __init__(self, params):
+		super(GaussianLRRNN, self).__init__()
+
+		pass
+
+
+	
+
+	
+
+
+#=========CONVENIENCE FUNCTIONS FOR MODEL HANDLING===================
 
 def load_rnn(inPath: str):
 
@@ -590,6 +698,24 @@ def save_rnn(outPath: str,
 			file = os.path.join(outPath, f"{key}.npz")
 			np.savez(file, value)
 
+def run_rnn(model, input_, init_state=None):
+
+	"""Convenience function for running an RNN of any type
+	return detached outputs
+	saves on unsqueeze hassle etc. 
+	"""
+
+	model.eval()
+	if len(input_.shape) <= 2:
+		input_ = input_.unsqueeze(dim=0)
+	with torch.no_grad(): 
+		rates, out = model(input_, init_state=init_state)
+	
+	rates = rates.detach().numpy()
+	out = out.detach().numpy()
+
+	return rates, out
+
 def clone(model):
 
 	"""
@@ -601,8 +727,17 @@ def clone(model):
 
 def detach_all_parameters(model):
 
-	"""Returns a copy of the model with all relevant parameters detached"""
-	pass
+	"""Returns a dictionary with all relevant parameters detached"""
+
+	mparams = {
+		name.split('.')[-1]: param.detach().numpy()
+		for (name, param) in model.named_parameters()
+	}
+
+	return mparams
+
+#=============METHODS MANIPULATING NETWORK STATS========================
+
 
 def shuffle(model):
 	"""
@@ -625,7 +760,6 @@ def resample(model, N, pops=None, return_pops=False):
 	r = params["rank"]
 	#old_size = params["recurrent_size"] -> only for scaling
 	params["recurrent_size"] = N
-
 
 	conn_vecs = get_model_conn_vecs(model, return_labels=False)
 	covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
@@ -652,6 +786,121 @@ def resample(model, N, pops=None, return_pops=False):
 		
 	else:
 		return model_resampled
+	
+
+def refactor2pops(model, pops, **kwargs):
+
+	from copy import deepcopy
+
+	"""
+	creates a separate model with Gaussian stats for each Gaussian population in a model 
+	works just like resample
+	"""
+	models = []
+	r = model.params["rank"]
+	orth_I = kwargs.get("orth_I", False)
+	orth_n = kwargs.get("orth_n", False)
+	conn_vecs = get_model_conn_vecs(model, 
+								 return_labels=False,
+								 orth_I=orth_I,
+								 orth_n=orth_n)
+
+	covs = get_overlap_matrix_all_params(conn_vecs, pops=pops)
+
+	for idx in range(covs.shape[2]):
+		params = deepcopy(model.params)
+		#just sample with same size
+		N = (pops==idx).sum()
+		params["recurrent_size"] = N
+
+		loadings = np.array(
+					np.linalg.cholesky(covs[:,:,idx].T) 
+					@ np.float32(np.random.randn(covs.shape[0], N))
+		)
+
+		sub_model = RNN(params)	   
+		m = loadings[:r,:] 
+		n = loadings[r:2*r,:] 
+		w_in = loadings[2*r:2*r+2,:]
+		w_out = loadings[2*r+2:,:] 
+
+		with torch.no_grad():
+			sub_model.rnn.m.set_(torch.from_numpy(m.T).float()) 
+			sub_model.rnn.n.set_(torch.from_numpy(n).float())
+			sub_model.rnn.w_in.set_(torch.from_numpy(w_in).float())
+			sub_model.rnn.w_out.set_(torch.from_numpy(w_out.T).float())
+
+		models.append(sub_model)
+
+	return models
+
+
+def pop2network(model, pops, idx):
+
+	"""
+	builds a network from a population -> i.e. the network only has the 
+	population-specific dynamics. Similar to prev function, only that we simply
+	copy the loadings rather than sampling from the distribution
+
+	"""
+	params = model.params
+	m, n, w_in, w_out = get_lr_net_params(model)
+	m_sub = m[:,pops==idx]
+	n_sub = n[pops==idx,:]
+	w_in_sub = w_in[:,pops==idx]
+	w_out_sub = w_out[pops==idx,:]
+
+	#set new network size
+	params["recurrent_size"] = (pops==idx).sum()
+	sub_model = RNN(params)
+
+	with torch.no_grad():
+		sub_model.rnn.m.set_(torch.from_numpy(m_sub.T).float()) 
+		sub_model.rnn.n.set_(torch.from_numpy(n_sub).float())
+		sub_model.rnn.w_in.set_(torch.from_numpy(w_in_sub).float())
+		sub_model.rnn.w_out.set_(torch.from_numpy(w_out_sub.T).float())
+
+	return sub_model
+
+def nets2network(models: List[RNN]) -> RNN:
+
+	"""
+	'Fuses' several networks (e.g. populations) into a single network by stacking the
+	loadings
+	PREREQUISITE: all models have the same rank and the same number of input and
+	ouput vectors
+	"""
+
+	assert all([model.params["rank"]==models[0].params["rank"] for model in models])
+	assert all([model.rnn.w_in.shape[0]==models[0].rnn.w_in.shape[0] for model in model])
+	assert all([model.rnn.w_out.shape[1]==models[0].rnn.w_out.shape[1] for model in models])
+	
+	m_full = torch.vstack((model.rnn.m for model in models))
+	n_full = torch.vstack((model.rnn.n for model in models))
+	w_out_full = torch.vstack((model.rnn.w_out for model in models))
+	w_in_full = torch.vstack((model.rnn.w_in for model in models))
+
+	#TODO: now patch all the other parameters
+	pass 
+
+		
+
+
+		
+
+
+
+
+	
+
+
+
+
+
+
+
+
+
 
 
 
