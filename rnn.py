@@ -554,13 +554,27 @@ class MeanFieldRNNCell(nn.Module):
 		chols = np.array([np.linalg.cholesky(proj_spd(covs[:,:,i])) for i in range(covs.shape[2])]).transpose(1,2,0)
 		chols += np.random.rand(*chols.shape) * cov_init_noise
 
+		"""
+		TODO: bit messy -> streamline.
+		"""
+
 		#will initialise hooked version if necessary:
 		params["use_hooked"] = kwargs.get("use_hooked", False)
 
 		if params["use_hooked"]:
-			params["trainable_idxs"] = kwargs.get("trainable_idxs", None)
+			params["trainable_idxs"] = kwargs.get("trainable_idxs", [])
 			params["cov_mask"] = kwargs.get("cov_mask", None)
 
+			#reset trainable populations to random Gaussians or generic matrices
+			#define in the params:
+
+			for j in params["trainable_idxs"]: 
+					_, chol = initialize_lr_connectivity(params, return_chol=True)
+					#Add some noise -> populations different
+					chol += np.random.randn(*chol.shape)*cov_init_noise
+					chols[...,j] = chol
+					covs[...,j] = chol @ chol.T
+					
 		meanfield = RNN(params)
 
 		with torch.no_grad():
@@ -621,18 +635,15 @@ class GaussianLRRNN(nn.Module):
 
 	For now this is only implemented as a parent class for the hooked version, 
 	which allows to train populations separately
+
+	TODO: implement. For now the MF variant serves though and
+	a GaussianLRRNN can always be sampled from the basis defined there
 	"""
 
 	def __init__(self, params):
 		super(GaussianLRRNN, self).__init__()
 
 		pass
-
-
-	
-
-	
-
 
 #=========CONVENIENCE FUNCTIONS FOR MODEL HANDLING===================
 
