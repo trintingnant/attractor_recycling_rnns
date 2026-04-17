@@ -23,7 +23,7 @@ class RNN(nn.Module):
 		#default is vanilla full-rank RNN
 		low_rank = self.params.get("low_rank", False)
 		mean_field = self.params.get("mean_field", False)
-		use_hook = self.params.get("use_hooked", False)
+		use_hook = self.params.get("use_hook", False)
 
 		if low_rank:
 			if mean_field:
@@ -32,7 +32,10 @@ class RNN(nn.Module):
 				else:
 					self.rnn = MeanFieldRNNCell(params)
 			else:
-				self.rnn = LowRankRNNCell(params)
+				if use_hook:
+					self.rnn = HookedLowRankRNNCell(params)
+				else:
+					self.rnn = LowRankRNNCell(params)
 
 		else:
 			self.rnn = RNNCell(params)
@@ -289,7 +292,44 @@ class LowRankRNNCell(nn.Module):
 		#Network output:
 		out = self.w_out_scale * self.out_nonlinearity(hidden_state).matmul(self.w_out) / self.net_size
 		return hidden_state, out
+	
+	@classmethod
+	def sample_from_covs(covs, N, params, weights=None):
+		"""samples a low-rank RNN from a given set of covariance matrices, one for each population;
+		dual of the init_from_covs procedure for MeanFieldRNN;
+		Neurons are assigned monotonically. If weights==None, weights are uniform"""
 
+		in_dim = params["input_size"]
+		out_dim = params["output_size"]
+		num_loadings = covs.shape[1]
+		r = int((num_loadings-in_dim-out_dim)/2)
+		num_pops = covs.shape[2]
+
+		#loadings
+		loadings = np.zeros((num_loadings, N))
+
+		#initialise basis 
+		basis_dim = num_loadings * num_pops
+		U = np.float32(np.random.randn(basis_dim, N))
+		loadings_ls = []
+		if weights is None: 
+			weights = np.ones(num_pops) * int(N/num_pops)
+
+		for i in range(num_pops):
+			low, high = np.cumsum(weights[:i]), np.cumsum(weights[:i+1])
+			loadings[:,low:high] = np.float32(np.linalg.cholesky(proj_spd(covs[:,:,i] @ U[:, low:high])))
+		
+		assert params["low_rank"] == True
+		model = RNN(params)
+
+		with torch.no_grad():
+			model.rnn.m.set_(torch.from_numpy(loadings[:r,:].T))
+			model.rnn.n.set_(torch.from_numpy(loadings[r:2*r,:]))
+			model.rnn.w_in.set_(torch.from_numpy(loadings[2*r:2*r+2,:]))
+			model.rnn.w_out.set_(torch.from_numpy(loadings[2*r+2:,:].T))
+		
+		return model
+	
 	def svd_reparametrization(self):
 
 		"""
@@ -314,6 +354,57 @@ class LowRankRNNCell(nn.Module):
 		"""
 		self.__setattr__("w_rec", self.m @ self.n / self.net_size)
 
+class HookedLowRankRNNCell(LowRankRNNCell):
+
+	"""implements LRRNNCell with gradient masking through hooks ="""
+
+	def __init__(self, params):
+		super().__init__(params)
+		self.num_pops = params.get("num_pops", 1)
+		#population weights -> if not provided weights are uniform
+		self.weights = params.get("weights", torch.ones(self.num_pops) * (1 / self.num_pops))
+		
+		#assign neurons monotonically:
+		pop_size = int(self.params["recurrent_size"]/self.num_pops)
+		self.pop_assignments = torch.arange(self.num_pops).repeat_interleave(pop_size).long()
+		
+		#register the population assignments as buffer so it moves into the state dict
+		#ATTENTION: might cause problems down the road
+		self.register_buffer("pop_assign", self.pop_assignments)
+
+		#set population-level mask
+		self.trainable_idxs = params.get("trainable_idxs", None)
+		pop_mask = torch.zeros(self.num_pops)
+		pop_mask[self.trainable_idxs] = 1.0
+
+		#export to neuron-level mask
+		neuron_mask = pop_mask[self.pop_assign] 
+		self.register_buffer("neuron_mask", neuron_mask)
+		
+		#register mask
+		self._register_gradient_masks()
+		
+	def _register_gradient_masks(self):
+
+		"""
+		Register the gradient masks -> grads zero-ed out for neurons"""
+		if self.m.requires_grad:		
+			self.m.register_hook(
+            	lambda grad: grad * self.neuron_mask.unsqueeze(1)
+        	)
+		if self.n.requires_grad:
+			self.n.register_hook(
+            	lambda grad: grad * self.neuron_mask.unsqueeze(0)
+        	)
+		if self.w_in.requires_grad:
+			self.w_in.register_hook(
+            	lambda grad: grad * self.neuron_mask.unsqueeze(0)
+        	)
+		if self.w_out.requires_grad:
+			self.w_out.register_hook(
+            	lambda grad: grad * self.neuron_mask.unsqueeze(1)
+        	)
+	
 class MeanFieldRNNCell(nn.Module):
 
 	"""
@@ -583,6 +674,7 @@ class MeanFieldRNNCell(nn.Module):
 
 		return meanfield
 
+
 class HookedMeanFieldRNNCell(MeanFieldRNNCell):
 
 	"""MeanField RNN Cell with masked gradients (implemented through hooks)"""
@@ -592,11 +684,12 @@ class HookedMeanFieldRNNCell(MeanFieldRNNCell):
 		"""
         Args:
             cov_mask: Entry point for the hook: torch.Tensor[n_loadings, n_loadings, n_supports]
-            trainable_k: int → only first k entries along last dim trainable
+            trainable_k: Entry point for the hook: List := subset([1...n_supports])
 
-		NOTE: Mask will allow training an arbitray set of entries of the [n_loadings, n_loadings, num_pops]
-		covariance tensor, so it allows really fine-tuning the training process. Trainable_idxs is more of a 
-		quick-and-dirty approach, where anything [...,idx] is trained. Usually enough. 
+		NOTE: Mask will allow training an arbitray set of entries of the [n_loadings x n_loadings x num_pops]
+		covariance tensor, so it allows really fine-grained tuning of the training process. 
+		Trainable_idxs is more of a quick-and-dirty approach, where anything [...,idx] is trained. 
+		Should be enough most of the time. 
         """
 
 		super().__init__(params)
@@ -798,7 +891,6 @@ def resample(model, N, pops=None, return_pops=False):
 	else:
 		return model_resampled
 	
-
 def refactor2pops(model, pops, **kwargs):
 
 	from copy import deepcopy
