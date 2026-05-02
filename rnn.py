@@ -367,7 +367,7 @@ class HookedLowRankRNNCell(LowRankRNNCell):
 		#assign neurons monotonically:
 		pop_size = int(self.params["recurrent_size"]/self.num_pops)
 		self.pop_assignments = torch.arange(self.num_pops).repeat_interleave(pop_size).long()
-		
+
 		#register the population assignments as buffer so it moves into the state dict
 		#ATTENTION: might cause problems down the road
 		self.register_buffer("pop_assign", self.pop_assignments)
@@ -550,17 +550,16 @@ class MeanFieldRNNCell(nn.Module):
 		rates = torch.hstack((K_new, V_new))
 		
 		#want to return output?
-		w_out = torch.sum(
-					(torch.einsum('ij, jkl -> kl',  K_new, self.covs[:nidx, Widx:, :]) +
-					 torch.einsum('ij, jkl -> kl', V_new, self.covs[Iidx:Widx, Widx:, :])
-					 ), axis=1
-					)
+
+		w_out = (torch.einsum('li, ijk -> ljk', K_new, self.covs[:nidx, Widx:,:]) +
+		   		torch.einsum('li, ijk -> ljk', V_new, self.covs[Iidx:Widx,Widx:,:]))
+		
 		
 		if self.out_nonlinearity == "tanh":
-			w_out *= self.weights * gains
+			w_out = (w_out * self.weights * gains).sum(axis=2)
 			
 		else:
-			w_out *= self.weights
+			w_out = (w_out * self.weights).sum(axis=2)
 		
 			
 		return rates, w_out
@@ -573,7 +572,7 @@ class MeanFieldRNNCell(nn.Module):
 		return 1/ torch.sqrt(1 + (torch.pi / 2) * x)
 	
 	@classmethod
-	def init_from_model(cls, model, pops, cov_init_noise):
+	def init_from_model(cls, model, pops, cov_init_noise, **kwargs):
 		"""
 		initialises a mean MeanFieldRNN from a different cell type (right now, only LRRNNCell is supported)
 		"""
@@ -965,7 +964,7 @@ def pop2network(model, pops, idx):
 
 	return sub_model
 
-def nets2network(models: List[RNN]) -> RNN:
+def pops2network(models: List[RNN], model_params) -> RNN:
 
 	"""
 	'Fuses' several networks (e.g. populations) into a single network by stacking the
@@ -975,16 +974,27 @@ def nets2network(models: List[RNN]) -> RNN:
 	"""
 
 	assert all([model.params["rank"]==models[0].params["rank"] for model in models])
-	assert all([model.rnn.w_in.shape[0]==models[0].rnn.w_in.shape[0] for model in model])
+	assert (models[0].net_size==model_params["recurrent_size"])
+	assert all([model.rnn.w_in.shape[0]==models[0].rnn.w_in.shape[0] for model in models])
 	assert all([model.rnn.w_out.shape[1]==models[0].rnn.w_out.shape[1] for model in models])
 	
-	m_full = torch.vstack((model.rnn.m for model in models))
-	n_full = torch.vstack((model.rnn.n for model in models))
-	w_out_full = torch.vstack((model.rnn.w_out for model in models))
-	w_in_full = torch.vstack((model.rnn.w_in for model in models))
+	m_full = torch.vstack([model.rnn.m for model in models])
+	n_full = torch.vstack([model.rnn.n.T for model in models]).T
+	w_in_full = torch.vstack([model.rnn.w_in.T for model in models]).T
+	w_out_full = torch.vstack([model.rnn.w_out for model in models])
 
-	#TODO: now patch all the other parameters
-	pass 
+	model_params["recurrent_size"] = sum([model.params["recurrent_size"] for model in models])
+	model_fused = RNN(model_params)
+	with torch.no_grad():
+		model_fused.rnn.m.copy_(m_full)
+		model_fused.rnn.n.copy_(n_full)
+		model_fused.rnn.w_in.copy_(w_in_full)
+		model_fused.rnn.w_out.copy_(w_out_full)
+
+	return model_fused
+
+
+
 
 		
 
