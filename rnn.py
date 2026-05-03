@@ -489,7 +489,12 @@ class MeanFieldRNNCell(nn.Module):
 	def forward(self, input_, hidden_state, noise=0, return_gains=False):
 
 		"""
-		Performs forward pass for meanfield equations
+		Performs forward pass for the meanfield equations
+		TODO: train only the cholesky decomposition to ensure SPD covs post training
+		However, this would necessitate re-training all the trained models. So this is something
+		to do afterwards, scovsre-setting the chols from non-SPD covs presents just the 
+		same problem as drawing the loadings from non-SPD covs in the first place...
+		...for now we'll project to closest SPD matrix post-hoc and see if that works
 
 		Args:
 			input_: torch.Tensor[1 x in_dim]
@@ -520,6 +525,8 @@ class MeanFieldRNNCell(nn.Module):
 			k := population
 			i,j := regular indices
 		"""
+		covs = torch.zeros_like(self.chols)
+		covs = torch.bmm(self.chols, self.chols.permute(1,0,2))
 
 
 		#GAINS:
@@ -527,18 +534,17 @@ class MeanFieldRNNCell(nn.Module):
 				torch.sum(
 					torch.hstack(
 					(
-					torch.einsum('...iik, ...li -> ...lik', self.covs[Iidx:Widx, Iidx:Widx,:], V**2),
-					torch.einsum('...iik, ...li -> ...lik', self.covs[:nidx, :nidx, :], K**2)
+					torch.einsum('...iik, ...li -> ...lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
+					torch.einsum('...iik, ...li -> ...lik', covs[:nidx, :nidx, :], K**2)
 					)
 					), axis=1
-				), mode='approx'
+				)
 			)
 
-		
 		#RECURRENT INPUT: 
 		rec_input = torch.stack(
-    						(torch.einsum('...ijk, ...lj -> ...lik', self.covs[nidx:Iidx, :nidx,:], K),
-     						torch.einsum('...ijk, ...lj -> ...lik', self.covs[nidx:Iidx, Iidx:Widx,:], V) 
+    						(torch.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, :nidx,:], K),
+     						torch.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, Iidx:Widx,:], V) 
      						)
 						)
 		#print(self.covs[nidx:Widx, Iidx:Widx,:])
@@ -551,8 +557,8 @@ class MeanFieldRNNCell(nn.Module):
 		
 		#want to return output?
 
-		w_out = (torch.einsum('li, ijk -> ljk', K_new, self.covs[:nidx, Widx:,:]) +
-		   		torch.einsum('li, ijk -> ljk', V_new, self.covs[Iidx:Widx,Widx:,:]))
+		w_out = (torch.einsum('li, ijk -> ljk', K_new, covs[:nidx, Widx:,:]) +
+		   		torch.einsum('li, ijk -> ljk', V_new, covs[Iidx:Widx,Widx:,:]))
 		
 		
 		if self.out_nonlinearity == "tanh":
@@ -561,10 +567,9 @@ class MeanFieldRNNCell(nn.Module):
 		else:
 			w_out = (w_out * self.weights).sum(axis=2)
 		
-			
 		return rates, w_out
 
-	def compute_gains(self, x, mode="approx"):
+	def compute_gains(self, x):
 		"""
 		computes gains for populations from latent variables
 		uses approximation from Pals et a. (2024) and Marshall (2025) -> 'tanh kinda looks like erf'
@@ -850,12 +855,25 @@ def shuffle(model):
 	params["lr_cov"] = get_model_conn_vecs(model, return_labels=False)
 	return RNN(params)
 
+def sample(means, covs, N, weights, keep_means=True):
+
+	loadings = np.zeros(covs.shape[0], N)
+
+	if keep_means:
+		for i in range(covs.shape[2]):
+			loadings = np.random.multivariate_normal(means[i], covs[...,i], size=int(weights[i]*N))
+
+
+
+
+
 def resample(model, N, pops=None, return_pops=False):
 
 	"""
 	resample network to dimension N
 	ATTENTION: pops are the populations of the to-be-resampled model
 	NOT of the resampled model itself
+	TODO: this could be done so much easier if the initialisation was simpler 
 	"""
 
 	num_pops = extract_num_pops(pops)
@@ -889,6 +907,8 @@ def resample(model, N, pops=None, return_pops=False):
 		
 	else:
 		return model_resampled
+	
+
 	
 def refactor2pops(model, pops, **kwargs):
 
