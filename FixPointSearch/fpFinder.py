@@ -3,7 +3,7 @@ import torch, numpy as np
 from rnn import RNN as RNN
 from torch.autograd import Variable, functional
 import os, pickle as pkl
-from FixedPoint import FixedPoint, TensorArray
+from FixPointSearch.FixedPoint import FixedPoint, TensorArray
 
 
 class FixedPointFinder(object):
@@ -214,13 +214,29 @@ class FixedPointFinder(object):
 		init_hidden = init_hidden.detach()
 		init_hidden.requires_grad = True
 		return init_hidden
+	
+	def fixed_point_grid_search_fr(self, input, num_grid_points, dist_thresh, pca):
 
-	def fixed_point_grid_search_lr(self, input, num_grid_points, dist_thresh):
 		"""
-		calculates suitable ICs for FP grid search for low rank nets
+		Searches for fixpoints starting from ICs in a grid. Useful e.g for ring- and line-
+		attractors. ICs should ideally form a grid in the lower-d space of the dynamics, e.g.
+		the subspace spanned by the top k PCs
+		"""
+		raise NotImplementedError
+	
+
+	def fixed_point_grid_search_lr(self, input, num_grid_points, dist_thresh, **kwargs):
+		"""
+		calculates suitable ICs for FP grid search for low rank nets. Like above, but
+		grid is already constrained to live in latent variable space
 		"""
 		from utils import proj_
 		from math import pow
+
+		record_hiddens = kwargs.get("record_hiddens", False)
+		verbose = kwargs.get("verbose", False)
+		super_verbose = kwargs.get("super_verbose", False)
+
 		r = self.model.params["rank"]
 		noise_scale = self.noise_scale
 		rates, _ = self.model(input.unsqueeze(dim=0))
@@ -253,9 +269,9 @@ class FixedPointFinder(object):
 				FP = self.find_fixed_point(input,
 									max_iterations=3,
 									init_hidden=torch.from_numpy(ic),
-									record_hiddens=True,
-									verbose=True,
-									super_verbose=True
+									record_hiddens=record_hiddens,
+									verbose=verbose,
+									super_verbose=super_verbose
 									)
 
 				#weed out duplicates:
