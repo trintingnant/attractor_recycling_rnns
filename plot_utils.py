@@ -4,7 +4,7 @@ from matplotlib.gridspec import GridSpec
 import torch
 from typing import Optional, Union, List
 import rnn
-from rnn import RNN
+from rnn import RNN, run_rnn
 from default_params import default_params
 import numpy as np
 from sklearn.decomposition import PCA
@@ -14,9 +14,9 @@ from sklearn.decomposition import PCA
 import sys
 sys.path.append('../FixPointSearch')
 from FixPointSearch.FixedPoint import FixedPoint 
-
 #add style sheets to path
 sys.path.append('../styles')
+import plotstyle
 
 NUM_ANGLES = 25
 
@@ -33,7 +33,7 @@ def center(ax):
 
 #=======REGULAR PLOT UTILS=====================
 
-def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None):
+def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
 
     """Plots the eigenvalue spectrum of a (RNN-weight)-matrix"""
 
@@ -86,11 +86,16 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None):
     circle = Circle((0,0), model.params["spectral_radius"], fill=True, alpha=0.2, color="black", 
                     label=r"$g={0}$".format(model.params["spectral_radius"]), zorder=-1)
     ax.add_artist(circle)
-    ax.scatter(real, imag, c=c, cmap="coolwarm", alpha=.5, zorder=10)
-    #plot stability line
-    ymin, ymax = np.min(imag), np.max(imag)
+    ax.scatter(real, imag, c=c, alpha=.8, zorder=10)
+    #plot stability li
+    ymin, ymax = 1.2*np.min(imag), 1.2*np.max(imag)
+    xmin, xmax = 1.2*np.min(real), 1.2*np.max(real)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
     ax.set_aspect("equal", adjustable="box")
-    ax.axvline(x=1, ymin=ymin, ymax=ymax,  c="black", linestyle='--', label="stability line")
+    ax.axvline(x=1, ymin=ymin, ymax=ymax,  c="black", linestyle='--', label="stability line", alpha=.5)
     ax.axvline(x=0, ymin=ymin, ymax=ymax, c="grey", alpha=.2)
     ax.axhline(y=0, c="grey", alpha=.2)
     ax.scatter(0,0, facecolors=None, c='grey', alpha=.2, zorder=-1)
@@ -102,8 +107,7 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None):
     return fig, ax
 
 def plot_multitask_net_response(model, trial, antitrial):
-    fig, axs = plt.subplots(3,1, sharey=False, sharex=True) 
-
+    fig, axs = plt.subplots(2,1, sharey=False, sharex=True) 
     trial, target, _ = trial
     antitrial, antitarget, _ = antitrial
 
@@ -117,21 +121,6 @@ def plot_multitask_net_response(model, trial, antitrial):
     axs[1].plot(antitarget, "-.", c="black", alpha=.5)
 
     axs[0].set_title('Task')
-    """
-    axs[2].set_prop_cycle(color=['crimson', 'orange', 'silver', 'cornflowerblue'])
-    axs[2].plot(rates[0,:,:].detach().numpy(), c="b", alpha=.1)
-    axs[2].plot(antirates[0,:,:].detach().numpy(), c="r", alpha=.1)
-    #axs[2].plot(rates[0,:,:].detach().numpy().mean(axis=0), c="black")
-    axij = axs[2].twinx()
-    axs[2].set_title('Rates')
-    #axs[2].plot(rates[0,:,:].detach().numpy().mean(axis=0), c="black")
-    axij.plot(rates[0,:,:].detach().numpy().mean(axis=1), c="b")
-    axij.plot(antirates[0,:,:].detach().numpy().mean(axis=1), c="r")
-    #axs[i].axvline(15, ymin=-1, ymax=1, linestyle='--', c='black', label='mean')
-    #axs[1].axvline(7, ymin=-1, ymax=1, linestyle='--', c='black')
-    axs[2].set_xlabel(r'$time$')
-    """
-
     plt.tight_layout(w_pad=1.5, h_pad=1.5)
     plt.show() 
 
@@ -211,66 +200,6 @@ def create_common_projections_grid(model,
 
     fig.show()
 
-def check_unseen_inputs(model: RNN, 
-                        transient: int,
-                        task_params,
-                        num_angles: int=10,
-                        _plot: bool=True,
-                        stims: Optional[np.ndarray]=None,
-                        dim_p = np.array([2,4]),
-                        method="dc",
-                        save: bool=False):
-    
-    angles = np.linspace(0, np.pi/2, num_angles)
-    components3d = np.zeros((3, model.rnn.w_rec.detach().numpy().shape[0], num_angles))     
-    components2d = np.zeros((2, model.rnn.w_rec.detach().numpy().shape[0], num_angles))     
-
-    
-    if not stims:
-        
-        stims = [np.repeat(np.array([np.cos(ang), np.sin(ang)]), 
-                     task_params["trial_len"], 
-                     axis=0).reshape(2,task_params["trial_len"]).T
-                 for ang in angles]
-    if _plot:
-        
-        fig = plt.figure(figsize=plt.figaspect(0.5))
-        ax = fig.add_subplot(1, 2, 1, projection='3d')
-        ax1 = fig.add_subplot(1,2,2, projection='3d')
-        
-    if method == "dc":
-        
-        for sIdx, stim in enumerate(stims):
-        
-            rates, out = rnn.get_rates(model, torch.Tensor(stim))
-            comps3d, pcs3, _ = get_PCA(rates[:, transient:, :], n_components=3)
-            ax.plot(pcs3[transient:,0], pcs3[transient:,2], pcs3[transient:,1], alpha=.5)
-            components3d[:,:, sIdx] = comps3d
-
-
-            comps2d, pcs2, _ = get_PCA(rates[:,transient:, :], n_components=2)
-            im = ax1.plot(pcs2[transient:,0], pcs2[transient:,1], np.repeat(stim[transient,0], pcs2.shape[0]-transient))
-            im = ax1.plot(pcs2[transient,0], pcs2[transient,1], stim[transient, 0], 'o')
-            components2d[:,:, sIdx] = comps2d
-    
-    elif method == "pulsed":
-        
-        for sIdx, stim in enumerate(stims):
-            
-            rates, out = rnn.get_rates(model, torch.Tensor(stim))
-            comp3ds, pcs3, _ = get_PCA(rates[:, transient:, :], n_components=3)
-            ax.plot(pcs3[transient:,0], pcs3[transient:,2], pcs3[transient:,1])
-            components3d[:,:, sIdx] = comps3d
-
-            comps2d, pcs2, _ = get_PCA(rates[:,transient:, :], n_components=2)
-            loc = np.repeat(np.max(stim, axis=0)[0], pcs2.shape[0]-transient)
-            components2d[:,:, sIdx] = comps2d
-            im = ax1.plot(pcs3[transient:,0], pcs3[transient:,1], loc)
-            im = ax1.plot(pcs2[transient,0], pcs2[transient,1], loc[0], 'o')
-    
-    
-    return components2d, components3d, pcs2, pcs3
-
 def plot_input_interpolation_fr(model,
                                 inputs: Optional,
                                 fps: Optional=None,
@@ -281,8 +210,8 @@ def plot_input_interpolation_fr(model,
 
     from utils import gram_schmidt_vecs, get_unstable_subspace
 
-    use_pca_3 = kwargs.get('pca_3')
-    use_unstable_subspace = kwargs.get('unstable_subspace')
+    use_pca_3 = kwargs.get('use_pca_3', False)
+    use_unstable_subspace = kwargs.get('unstable_subspace', False)
 
     if use_unstable_subspace:
         unstable_subspace = get_unstable_subspace(model, orth=True)
@@ -291,11 +220,7 @@ def plot_input_interpolation_fr(model,
     i, j, k = dims
     n_components=kwargs.get('n_components')
     if not n_components:
-        n_components = 5
-
-    trnst=kwargs.get('n_components')
-    if not trnst:
-        trnst=50
+        n_components = 3
     
     rates, out = model(inputs[0, :, :].unsqueeze(dim=0))
     ratess = torch.zeros((inputs.shape[0], *rates.shape[1:]))
@@ -452,7 +377,7 @@ def plot_vector_field_pca(input_=None,
 
     In any case, the relevant pca object should be created before execution and passed as an argument.
     """
-
+    fig, axs = plt.subplots(1,1)
     
     w_rec = model.rnn.w_rec.clone().detach().numpy()
     w_in = model.rnn.w_in.clone().detach().numpy() 
@@ -462,8 +387,8 @@ def plot_vector_field_pca(input_=None,
 
     rates, _ = model(input_)
     rates = rates[:,trnst:,:].detach().numpy()
-
     rates = rates.reshape(-1, rates.shape[2])
+
 
     
     if pca is None:
@@ -472,7 +397,6 @@ def plot_vector_field_pca(input_=None,
             #set to something safe and ridiculous
             num_components = 20
         #perform regular (independent for each input) PCA.
-        
         pca = PCA(n_components=num_components)
         pca.fit(rates)
     
@@ -531,25 +455,147 @@ def plot_vector_field_pca(input_=None,
             flow = dxdt(transformed_point)
             vfield[j,i, 0] = (flow @ comp1) 
             vfield[j,i, 1] = (flow @ comp2) 
-    plt.streamplot(ys, xs, vfield[:,:,0], vfield[:,:,1], color='white', zorder=0)
+    axs.streamplot(ys, xs, vfield[:,:,0], vfield[:,:,1], color='white', zorder=0)
     norm = np.sqrt(vfield[:,:,0]**2 + vfield[:,:,1]**2) 
     X, Y = np.meshgrid(xs, ys)
-    plt.pcolor(X, Y, norm, cmap='bone', zorder=-1)
+    axs.pcolor(X, Y, norm, cmap='bone', zorder=-1)
+
+    rates = pca.transform(rates)
+    axs.plot(rates[:,0], rates[:,1],
+    c='coral', linewidth=1)
+
+    print(rates[-1,0], rates[-1,1])
 
     if fp is not None:
         fp_xstar = fp.x_star.detach().numpy().squeeze()
-        plt.scatter((fp_xstar - rates.mean(axis=0)) @ comp1, \
+        axs.scatter((fp_xstar - rates.mean(axis=0)) @ comp1, \
         (fp_xstar - rates.mean(axis=0)) @ comp2, \
         c="coral", marker="x", zorder=1)
 
     try:
         plot_rates = kwargs["plot_rates"]
-        plt.plot((rates - rates.mean(axis=0)) @ comp1, \
-            (rates - rates.mean(axis=0)) @ comp2,  \
-            c='coral', linewidth=1)
+        rates = pca.transform(rates)
+        axs.plot(rates[:,0], rates[:,1],
+        c='coral', linewidth=1)
+        
 
     except:
         pass
+
+    return axs
+
+def plot_vector_field_MF(model, 
+                         input, 
+                         trnst=0,
+                         num_points=50,
+                         xlims=[-1,1],
+                         ylims=[-1,1],
+                         find_fps=False,
+                         num_fp_trials=20,
+                         ax=None
+                         ):
+    
+    from utils import compute_gains
+    plotstyle.use("general", 25)
+    if ax is None:
+        fig, ax = plt.subplots(1,1)
+    
+    ax.set_xlabel(r"$\kappa_{1}$")
+    ax.set_ylabel(r"$\kappa_{2}$")
+    """
+    ax.tick_params(left=False, 
+                   bottom=False, 
+                   labelleft=False, 
+                   labelbottom=False)
+    """
+
+    assert (model.rnn.rank == 2)
+    r = model.rnn.rank
+    in_dim = model.rnn.in_dim
+    weights = model.rnn.weights.detach().numpy()
+    covs = model.rnn.covs.detach().numpy()
+    nidx = r
+    Iidx = 2*r
+    Widx = 2*r + in_dim
+
+    #create grid on which to evaluate flow field
+    xs = np.linspace(*xlims, num_points)
+    ys = np.linspace(*ylims, num_points)
+
+    #set up flow field
+    vfield = np.zeros((num_points, num_points, 2))
+    #dynamix
+    def dkdt(k) :
+    
+        if len(k.shape)==1:
+            k = k.reshape(1, k.shape[0])
+        K = k[:,:2]
+        V = k[:,2:]
+        rec_input = np.stack(
+    						(np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, :nidx,:], K),
+     						np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, Iidx:Widx,:], V) 
+     						)
+						)
+        
+        gains = compute_gains(model, k)
+        rec_input = (rec_input * weights * gains).sum(axis=(0,3))
+        dkdt = -K + rec_input
+        return dkdt
+   
+    for i, x in enumerate(xs):
+        for j, y in enumerate(ys):
+            z = np.array([x,y])
+            k = np.hstack((z, input[0,:]))[np.newaxis,:]
+            flow = dkdt(k)
+            vfield[j,i, 0] = flow[:,0][0]
+            vfield[j,i, 1] = flow[:,1][0]
+    ax.streamplot(ys, xs, vfield[:,:,0], vfield[:,:,1], color='white', zorder=0)
+    norm = np.sqrt(vfield[:,:,0]**2 + vfield[:,:,1]**2)
+    X, Y = np.meshgrid(xs, ys)
+    ax.pcolor(X, Y, norm, cmap='bone', zorder=-1)
+    rates, _ = run_rnn(model, torch.from_numpy(input))
+    ax.plot(rates[0,trnst:,0], rates[0,trnst:,1], c='hotpink')
+    
+    #TODO: there is a shape mismatch here, so this 
+    #presently won't work. Fix. 
+
+    #find fixed points, i.e. roots of dkdt
+    if find_fps:
+            
+        def DKDT(k, input):
+            """
+            This is the function passed to the root solver
+            """
+
+            k_full = torch.from_numpy(
+                        np.hstack((
+                            np.expand_dims(k, axis=0), 
+                            np.expand_dims(input, axis=0)
+                            ))
+                        ).to(torch.float32)
+            dkdt_ = dkdt(k_full)
+            return dkdt_[0,:2].detach().numpy()
+    
+        from scipy.optimize import root
+
+        X_grid, Y_grid = np.meshgrid(
+                                np.linspace(xlims[0], xlims[1], int(np.sqrt(num_fp_trials))),
+                                np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
+                                )
+        fps = []
+        for x in X_grid.ravel():
+            for y in Y_grid.ravel():
+                x0 = np.array([x,y])
+                #again, assume input equilibriates
+                sol = root(DKDT, x0=x0, args=input[trnst,:])
+                fps.append(sol)
+
+        for fp_sol in fps:
+            ax.scatter(fp_sol.x[0], fp_sol.x[1], marker="^", c="hotpink")
+        
+
+    return ax
+    
 
 
 
@@ -613,7 +659,7 @@ def plot_traj_similarity(model, inputs, base_idx=0, num_angles=NUM_ANGLES, trnst
     sims = []
 
     #this is just for the tickering -> TODO: convert to pi
-    angles = np.array([np.arccos(inputs[idx,0,0]) for idx in range(inputs.shape[0])])
+    angles = np.array([np.arccos(inputs[idx,0,0] / np.linalg.norm(inputs[idx,0,0])) for idx in range(inputs.shape[0])])
     angle = angles[0]
     angles = [np.angle(complex(np.cos(angle), np.sin(angle)), deg=True) for angle in angles] 
 
@@ -659,11 +705,12 @@ def lower_triangular_heatmap(covs,
                              numbers_fs=6, 
                              axs=None, 
                              labels=None,
-                             put_text=False):
+                             put_text=False,
+                             **kwargs):
     
     _, num_features, num_pops = covs.shape
     if axs is None:
-        fig, axs = plt.subplots(1, num_pops, figsize=figsize, dpi=dpi)
+        fig, axs = plt.subplots(1, num_pops, figsize=figsize, dpi=dpi, squeeze=False)
 
     for popIdx in range(num_pops):
     
@@ -676,66 +723,65 @@ def lower_triangular_heatmap(covs,
         mask_variance = np.eye(mat.shape[0]) * mat
         mask_variance = np.where(mask_variance==0, np.nan, mask_variance)
         mask_variance = np.where(mask_variance<eps_var, 0, mask_variance)
-        with plt.style.context('nakedstyle.mplstyle'):
 
-            if num_pops == 1:
-                axs.xaxis.tick_top()
-                axs.yaxis.tick_right()
-                axs.spines["bottom"].set_visible(False)
-                axs.spines["left"].set_visible(False)
+        if num_pops == 1:
+            axs[0,popIdx].xaxis.tick_top()
+            axs[0,popIdx].yaxis.tick_right()
+            axs[0,popIdx].spines["bottom"].set_visible(False)
+            axs[0,popIdx].spines["left"].set_visible(False)
 
-                im = axs.imshow(tri_mat_flattened, cmap='coolwarm')
-                imv = axs.imshow(mask_variance, cmap='bone')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='coolwarm')
+            imv = axs[0,popIdx].imshow(mask_variance, cmap='bone')
 
-                if labels is not None:
-                    
-                    axs.set_xticks(np.arange(len(labels)), labels, fontsize=label_fs)
-                    axs.set_yticks(np.arange(len(labels)), labels, fontsize=label_fs)
-
-            else:
+            if labels is not None:
                 
-                axs[popIdx].xaxis.tick_top()
-                axs[popIdx].yaxis.tick_right()
-                axs[popIdx].spines["bottom"].set_visible(False)
-                axs[popIdx].spines["left"].set_visible(False)
-                axs[popIdx].set_title(f'Population {popIdx+1}', pad=12.5)
+                axs[0,popIdx].set_xticks(np.arange(len(labels)), labels, fontsize=label_fs)
+                axs[0,popIdx].set_yticks(np.arange(len(labels)), labels, fontsize=label_fs)
+
+        else:
             
+            axs[0,popIdx].xaxis.tick_top()
+            axs[0,popIdx].yaxis.tick_right()
+            axs[0,popIdx].spines["bottom"].set_visible(False)
+            axs[0,popIdx].spines["left"].set_visible(False)
+            axs[0,popIdx].set_title(f'Population {popIdx+1}', pad=12.5)
+        
 
-                im = axs[popIdx].imshow(tri_mat_flattened, cmap='coolwarm')
-                imv = axs[popIdx].imshow(mask_variance, cmap='Greys')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='coolwarm')
+            imv = axs[0,popIdx].imshow(mask_variance, cmap='Greys')
 
-                if put_text:
+        if put_text:
+            ptile = kwargs.get('ptile', 0)
 
-                    for (i,j) in zip(*np.triu_indices_from(covs[:,:,popIdx])):
-                        #print only most significant values:
-                        if j > i and np.abs(tri_mat_flattened[i,j]) > np.percentile(np.abs(covs[:,:, popIdx]), 70):
-                            axs[popIdx].text(j,i, "{:.1f}".format(tri_mat_flattened[i,j]), ha="center", va="center", fontsize='xx-small')
+            for (i,j) in zip(*np.triu_indices_from(covs[:,:,popIdx])):
+                #print only most significant values:
+                if j > i and np.abs(tri_mat_flattened[i,j]) >= np.percentile(np.abs(covs[:,:, popIdx]), ptile):
+                    axs[0,popIdx].text(j,i, "{:.1f}".format(tri_mat_flattened[i,j]), ha="center", va="center", fontsize='xx-small')
 
-                    for i in range(covs.shape[0]):
-                        if mask_variance[i,i] != 0.0:
-                            axs[popIdx].text(i,i, "{:.1f}".format(mask_variance[i,i]), c="white", ha="center", va="center", fontsize='xx-small')
+            for i in range(covs.shape[0]):
+                if mask_variance[i,i] != 0.0:
+                    axs[0,popIdx].text(i,i, "{:.1f}".format(mask_variance[i,i]), c="white", ha="center", va="center", fontsize='xx-small')
 
-                if labels is not None:
+        if labels is not None:
+                
+            axs[0,popIdx].set_xticks(np.arange(len(labels)), labels, fontsize=label_fs)
+            if popIdx != num_pops-1:
+                axs[0,popIdx].set_yticks([], labels=[]) 
+            else:
+                axs[0,popIdx].set_yticks(np.arange(len(labels)), labels, fontsize=label_fs)
                     
-                    axs[popIdx].set_xticks(np.arange(len(labels)), labels, fontsize=label_fs)
-                    if popIdx != num_pops-1:
-                        axs[popIdx].set_yticks([], labels=[]) 
-                    else:
-                        axs[popIdx].set_yticks(np.arange(len(labels)), labels, fontsize=label_fs)
-                        
     if num_pops!=1:           
         fig.colorbar(im, ax=axs[:num_pops], shrink=0.4, location='right', pad=0.1)
         fig.colorbar(imv, ax=axs[:num_pops], shrink=0.4, location='bottom', pad=0.1)
 
-
     else:
-        pass
 
-
+        fig.colorbar(im, ax=axs, shrink=0.4, location='right', pad=0.1)
+        fig.colorbar(imv, ax=axs, shrink=0.4, location='bottom', pad=0.1)
 
 def connectivity_scatter(vec1, 
                          vec2, 
-                         x: Optional[np.ndarray], 
+                         x: Optional[np.ndarray]=None, 
                          mode ="regular", 
                          ax=None, 
                          **kwargs
@@ -756,14 +802,16 @@ def connectivity_scatter(vec1,
     """
 
     from sklearn.linear_model import LinearRegression
+    from utils import extract_num_pops
 
-    colors = ['tab:red', 'tab:blue']
-    print(vec1.shape, vec2.shape)
+    pops = kwargs.get("pops", np.zeros(vec1.shape[1]))
+    num_pops = extract_num_pops(pops)
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    colors = prop_cycle.by_key()['color'][:num_pops]
 
     if mode not in ["regular", "weighted", "hard_thresh"]:
         raise ValueError('Sorry, need to supply valid regression mode')
     
-    alphas = np.ones_like(x[0,:])
     if ax is None:
         _, ax = plt.subplots(1,1)
     
@@ -771,11 +819,13 @@ def connectivity_scatter(vec1,
         assert kwargs.get("pops") is not None
         pops = kwargs.get("pops")
         weights = np.ones_like(pops)
+        alphas = np.ones_like(pops)
 
     elif mode == "weighted":
         assert kwargs.get("pops") is not None
         pops = kwargs.get("pops")
         weights = phiPrime(x)[0,:]
+        alphas = np.ones_like(x)
         
     elif mode == "hard_thresh":
         thresh = kwargs.get("thresh", .5)
@@ -788,17 +838,22 @@ def connectivity_scatter(vec1,
     regression = LinearRegression()
 
     #note vecs need to have appropriate dimensions -> reshape(-1, 1) if passing a 1-d object
-    regression.fit(vec1, vec2, weights)
+    regression.fit(vec1.reshape(-1,1), vec2.reshape(-1,1), weights)
     slope, interc = regression.coef_, regression.intercept_
-    line_fit_all = ax.plot(xvals, slope*xvals+interc, c="black", linestyle="--", zorder=10000)
+    line_fit_all = ax.plot(xvals, (slope*xvals+interc)[0,:], c="black", linestyle="--", zorder=10000)
 
     for idx, color in enumerate(colors):
 
         pt_cloud = ax.scatter(vec1[pops==idx], vec2[pops==idx], c=color, label=f"Population {idx+1}", alpha=alphas, edgecolors='none')
-        regression.fit(vec1[pops==idx], vec2[pops==idx])
+        regression.fit(vec1[pops==idx].reshape(-1,1), vec2[pops==idx].reshape(-1,1))
         slope, interc = regression.coef_, regression.intercept_
-        line_fit = ax.plot(xvals, slope*xvals+interc, c=color, linestyle="--")
+        line_fit = ax.plot(xvals, (slope*xvals+interc)[0,:], c=color, linestyle="--")
 
+
+    return ax
+
+def connectivity_scatter_all_loadings():
+    pass
 
 
 
