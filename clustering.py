@@ -58,6 +58,8 @@ def clustering_stability(X,
     """
 
     from sklearn.base import clone
+    import warnings
+    warnings.simplefilter('ignore')
 
     labels = []
     idxs = []
@@ -82,20 +84,22 @@ def clustering_stability(X,
             score = adjusted_rand_score(l[inter_], k[inter_])
             scores.append(score)
 
+    
     #normalise
     if normalise:
         assert(normalisation_type in ["gaussian", "uniform"], 
                "Please provide a known normalisation type")
         
         if normalisation_type == "gaussian":
-            X_norm = np.random.randn(*X.shape)
 
+            X_norm = np.random.rand(*X.shape)
+            
         else:
             X_norm = (np.random.rand(*X.shape) -.5) * 2
-
+        
         norm_scores, _ = clustering_stability(X_norm, model=model, n_iter=n_iter, normalise=False)
         scores = [(score - np.mean(norm_scores)) / np.std(norm_scores) for score in scores]
-        
+    
     return scores, np.mean(scores)
 
     
