@@ -31,6 +31,9 @@ def center(ax):
 
     ax.set(xticks=[], yticks=[])
 
+def make_naked(ax):
+    ax.axis('off')
+
 #=======REGULAR PLOT UTILS=====================
 
 def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
@@ -492,10 +495,11 @@ def plot_vector_field_MF(model,
                          ylims=[-1,1],
                          find_fps=False,
                          num_fp_trials=20,
+                         dist_thresh=1e-2,
                          ax=None
                          ):
     
-    from utils import compute_gains
+    from utils import compute_deltas, g
     plotstyle.use("general", 25)
     if ax is None:
         fig, ax = plt.subplots(1,1)
@@ -537,7 +541,7 @@ def plot_vector_field_MF(model,
      						)
 						)
         
-        gains = compute_gains(model, k)
+        gains = g(compute_deltas(model, k))
         rec_input = (rec_input * weights * gains).sum(axis=(0,3))
         dkdt = -K + rec_input
         return dkdt
@@ -549,15 +553,13 @@ def plot_vector_field_MF(model,
             flow = dkdt(k)
             vfield[j,i, 0] = flow[:,0][0]
             vfield[j,i, 1] = flow[:,1][0]
+
     ax.streamplot(ys, xs, vfield[:,:,0], vfield[:,:,1], color='white', zorder=0)
     norm = np.sqrt(vfield[:,:,0]**2 + vfield[:,:,1]**2)
     X, Y = np.meshgrid(xs, ys)
     ax.pcolor(X, Y, norm, cmap='bone', zorder=-1)
     rates, _ = run_rnn(model, torch.from_numpy(input))
     ax.plot(rates[0,trnst:,0], rates[0,trnst:,1], c='hotpink')
-    
-    #TODO: there is a shape mismatch here, so this 
-    #presently won't work. Fix. 
 
     #find fixed points, i.e. roots of dkdt
     if find_fps:
@@ -583,23 +585,32 @@ def plot_vector_field_MF(model,
                                 np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
                                 )
         fps = []
-        for x in X_grid.ravel():
-            for y in Y_grid.ravel():
-                x0 = np.array([x,y])
-                #again, assume input equilibriates
-                sol = root(DKDT, x0=x0, args=input[trnst,:])
+        for i in range(X_grid.ravel().size):
+            x0 = np.array([X_grid.ravel()[i], Y_grid.ravel()[i]])
+            #again, assume input equilibriates
+            sol = root(DKDT, x0=x0, args=input[trnst,:])
+            if all([np.linalg.norm(sol.x - other.x) > dist_thresh for other in fps]):
                 fps.append(sol)
 
         for fp_sol in fps:
             ax.scatter(fp_sol.x[0], fp_sol.x[1], marker="^", c="hotpink")
-        
+            
+            k = np.hstack(
+                        (fp_sol.x,
+                         input[trnst,:]
+                        )
+            )
+
+            gains = compute_gains(model, k)
+            from scipy.optimize._numdiff import approx_derivative
+            Jac = approx_derivative(DKDT, k, args=(input,), method="2-point")
+            print(Jac)
+            #Jac = -np.eye(model.rnn.rank) + np.sum(covs[:nidx, nidx:Iidx,:] * gains, axis=2)
+            #eigvals, _= np.linalg.eig(Jac)
+            print(eigvals)
 
     return ax
     
-
-
-
-
 def plot_input_interpolation_lr(model, 
                                 inputs, 
                                 trnst=50, 
@@ -684,7 +695,7 @@ def plot_traj_similarity(model, inputs, base_idx=0, num_angles=NUM_ANGLES, trnst
     res = sims 
     ax.scatter(angles[0], res[0], color=colors1[0], marker='s', label="reference")
     ax.scatter(angles[1:], res[1:], color=colors1[1:], marker='s')
-    ax.xaxis.set_major_formatter(tck.FormatStrFormatter('%g $^\circ$'))    
+    #ax.xaxis.set_major_formatter(tck.FormatStrFormatter('%g $^\circ$'))    
     ax.set_xlabel(r"$\phi$ in deg")
     ax.set_ylabel(r"Sim = $\frac{\left \| X_0 X \right \|_F}{\left \| S_0  S \right \|_F}$", size=20, labelpad=10)
     ax.plot(angles, sims / max(sims), color='black', alpha=.6, zorder=-1)
@@ -708,6 +719,12 @@ def lower_triangular_heatmap(covs,
                              put_text=False,
                              **kwargs):
     
+    #for text color luminance-control
+    import matplotlib.colors as mcolors
+    cmap1 = plt.get_cmap('PRGn')
+    cmap2 = plt.get_cmap('hot')
+
+
     _, num_features, num_pops = covs.shape
     if axs is None:
         fig, axs = plt.subplots(1, num_pops, figsize=figsize, dpi=dpi, squeeze=False)
@@ -716,13 +733,15 @@ def lower_triangular_heatmap(covs,
     
         mat = covs[:,:,popIdx]
         mask = np.zeros_like(mat, dtype=bool)
-        mask[np.triu_indices_from(mask)] = True
+        mask[np.triu_indices_from(mat)] = True
         mask[np.diag_indices_from(mat)] = False
         tri_mat = np.where(~mask, np.nan, mat)
         tri_mat_flattened = np.where(np.abs(tri_mat)<eps, 0, tri_mat)
-        mask_variance = np.eye(mat.shape[0]) * mat
-        mask_variance = np.where(mask_variance==0, np.nan, mask_variance)
-        mask_variance = np.where(mask_variance<eps_var, 0, mask_variance)
+
+        mask_variance = np.eye(mat.shape[0], dtype=bool)
+        mask_variance = np.where(~mask_variance, np.nan, mask_variance)
+        mask_variance *= mat
+        
 
         if num_pops == 1:
             axs[0,popIdx].xaxis.tick_top()
@@ -730,8 +749,10 @@ def lower_triangular_heatmap(covs,
             axs[0,popIdx].spines["bottom"].set_visible(False)
             axs[0,popIdx].spines["left"].set_visible(False)
 
-            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='coolwarm')
-            imv = axs[0,popIdx].imshow(mask_variance, cmap='bone')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='PRGn')
+            norm = im.norm
+            imv = axs[0,popIdx].imshow(mask_variance, cmap='hot')
+            normv = imv.norm 
 
             if labels is not None:
                 
@@ -747,8 +768,10 @@ def lower_triangular_heatmap(covs,
             axs[0,popIdx].set_title(f'Population {popIdx+1}', pad=12.5)
         
 
-            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='coolwarm')
-            imv = axs[0,popIdx].imshow(mask_variance, cmap='Greys')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='PRGn')
+            norm = im.norm
+            imv = axs[0,popIdx].imshow(mask_variance, cmap='hot')
+            normv = imv.norm
 
         if put_text:
             ptile = kwargs.get('ptile', 0)
@@ -756,12 +779,25 @@ def lower_triangular_heatmap(covs,
             for (i,j) in zip(*np.triu_indices_from(covs[:,:,popIdx])):
                 #print only most significant values:
                 if j > i and np.abs(tri_mat_flattened[i,j]) >= np.percentile(np.abs(covs[:,:, popIdx]), ptile):
-                    axs[0,popIdx].text(j,i, "{:.1f}".format(tri_mat_flattened[i,j]), ha="center", va="center", fontsize='xx-small')
+                    if np.abs(covs[i,j, popIdx]) > 1e-1:
+                        r, g, b, _ = cmap1(norm(covs[i,j,popIdx]))
+                        # Compute perceived luminance (human vision weighted)
+                        luminance = 0.2126*r + 0.7152*g + 0.0722*b
+
+                        axs[0,popIdx].text(j,i, "{:.1f}".format(tri_mat_flattened[i,j]),
+                                           c="white" if luminance < .5 else "black",
+                                           ha="center", va="center", fontsize='xx-small'
+                                           )
 
             for i in range(covs.shape[0]):
-                if mask_variance[i,i] != 0.0:
-                    axs[0,popIdx].text(i,i, "{:.1f}".format(mask_variance[i,i]), c="white", ha="center", va="center", fontsize='xx-small')
+                r, g, b, _ = cmap2(normv(covs[i,i,popIdx]))
+                # Compute perceived luminance (human vision weighted)
+                luminance = 0.2126*r + 0.7152*g + 0.0722*b
 
+                axs[0,popIdx].text(i,i, "{:.1f}".format(mask_variance[i,i]),
+                                        c="white" if luminance < .5 else "black",
+                                        ha="center", va="center", fontsize='xx-small'
+                                           )
         if labels is not None:
                 
             axs[0,popIdx].set_xticks(np.arange(len(labels)), labels, fontsize=label_fs)
@@ -793,7 +829,7 @@ def connectivity_scatter(vec1,
 
     @Args:
     vec1, vec2: np.ndarray[size]
-    x: weights for weighted regression or hard_thresh regression, most of the time: gain of neurons at fixed point,  same as vec1
+    x: Fixed point. Gains of neurons at FP act as the weights, same as vec1
     mode: RegMode
         "regular": performs regular regression over the entire population
         "weighted": weighted regression, where the gains act as weights
@@ -802,12 +838,15 @@ def connectivity_scatter(vec1,
     """
 
     from sklearn.linear_model import LinearRegression
-    from utils import extract_num_pops
+    from utils import extract_num_pops, phiPrime
+    
 
-    pops = kwargs.get("pops", np.zeros(vec1.shape[1]))
+    pops = kwargs.get('pops', np.zeros(len(vec1)))
     num_pops = extract_num_pops(pops)
     prop_cycle = plt.rcParams['axes.prop_cycle']
-    colors = prop_cycle.by_key()['color'][:num_pops]
+    base_colors = prop_cycle.by_key()['color']
+    idx = np.linspace(0, len(base_colors)-1, num_pops, dtype=int)
+    colors = [base_colors[i] for i in idx]
 
     if mode not in ["regular", "weighted", "hard_thresh"]:
         raise ValueError('Sorry, need to supply valid regression mode')
@@ -819,7 +858,7 @@ def connectivity_scatter(vec1,
         assert kwargs.get("pops") is not None
         pops = kwargs.get("pops")
         weights = np.ones_like(pops)
-        alphas = np.ones_like(pops)
+        alphas = np.ones_like(pops)*.5
 
     elif mode == "weighted":
         assert kwargs.get("pops") is not None
@@ -838,22 +877,27 @@ def connectivity_scatter(vec1,
     regression = LinearRegression()
 
     #note vecs need to have appropriate dimensions -> reshape(-1, 1) if passing a 1-d object
-    regression.fit(vec1.reshape(-1,1), vec2.reshape(-1,1), weights)
+    regression.fit(vec1.reshape(-1, 1), vec2.reshape(-1, 1), weights)
     slope, interc = regression.coef_, regression.intercept_
-    line_fit_all = ax.plot(xvals, (slope*xvals+interc)[0,:], c="black", linestyle="--", zorder=10000)
+    line_fit_all = ax.plot(xvals, (slope * xvals + interc)[0,:], c="black", linestyle="--", zorder=10000)
 
     for idx, color in enumerate(colors):
 
-        pt_cloud = ax.scatter(vec1[pops==idx], vec2[pops==idx], c=color, label=f"Population {idx+1}", alpha=alphas, edgecolors='none')
-        regression.fit(vec1[pops==idx].reshape(-1,1), vec2[pops==idx].reshape(-1,1))
+        pt_cloud = ax.scatter(vec1[pops==idx], vec2[pops==idx], color=color, label=f"Population {idx+1}", alpha=alphas, edgecolors='none')
+        regression.fit(vec1[pops==idx].reshape(-1, 1), vec2[pops==idx].reshape(-1, 1))
         slope, interc = regression.coef_, regression.intercept_
-        line_fit = ax.plot(xvals, (slope*xvals+interc)[0,:], c=color, linestyle="--")
+        line_fit = ax.plot(xvals, (slope * xvals + interc)[0,:], c=color, linestyle="--")
 
 
     return ax
 
-def connectivity_scatter_all_loadings():
-    pass
+
+
+
+
+
+
+    
 
 
 

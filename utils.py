@@ -467,6 +467,8 @@ TODO: implement rejection sampling for non-spd covariance matrices
 add noise to chols, then sample until matrix is SPD.
 """
 
+#=====================MEAN FIELD================================
+
 def make_MF_covs_pop_dyn(cov_params):
 
     """
@@ -642,7 +644,7 @@ def make_MF_covs_RA(cov_params):
 	return make_MF_covs_LC(cov_params)
 	
 	
-def make_MF_covs_attr_inhib (cov_params):
+def make_MF_covs_attr_inhib(cov_params):
 
 	"""
     Create covariance matrices for the model relying on attractor dynamix
@@ -695,14 +697,10 @@ def make_MF_covs_attr_inhib (cov_params):
 	"""
 	return cov
 
-def compute_gammas(model, inputs):
-    rates, out = run_rnn(model, inputs)
-    gammas = phiPrime(rates)
-    return gammas
 
-def compute_gains(model, k):
+def compute_deltas(model, k):
 	"""
-	computes gains of populations for MeanFieldRNNCells
+	computes deltas of populations for MeanFieldRNNCells
 	NOTE: expects np.arrays 
 	NOTE: x is the full state vector of latents (including input latents)
 	TODO: streamline this with the rnn specific-functions
@@ -717,29 +715,33 @@ def compute_gains(model, k):
 	nidx = r
 	Iidx = 2*r
 	Widx = 2*r + in_dim
-	x = np.sum(
-			np.hstack(
+	deltas = np.sum(
+				np.hstack(
 					(
 					np.einsum('...iik, ...li -> ...lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
 					np.einsum('...iik, ...li -> ...lik', covs[:nidx, :nidx, :], K**2)
-					)
-					), axis=1
-				)
-
+					), 
+				), axis=1
+			)
 	
-	gains = 1/ np.sqrt(1 + (np.pi / 2) * x)
-	
-	#right now return raw gains, i.e. gains per population: let's see if that makes the most sense
-	return gains
-	
+	return deltas
 
+def g(deltas):
+	"""Gaussian integral"""
+	return 1 / np.sqrt(1 + (np.pi / 2) * deltas)
+	
+def gPrime(deltas):
+	"""Derivative of g"""
+	return -(np.pi / 2) * g(deltas)**3
 
+#===================MISCELLANEOUS=============================
+	
 def build_state_dicts_from_params(params, idx):
     from collections import OrderedDict
     state_dict = OrderedDict(
                 ("rnn." + name, torch.from_numpy(param))
                 for name, param in params[idx].items()
-)
+				)
     return state_dict
 
 def reset_model_from_params_idx(model, params, idx):
