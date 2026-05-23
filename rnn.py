@@ -525,9 +525,10 @@ class MeanFieldRNNCell(nn.Module):
 			k := population
 			i,j := regular indices
 		"""
+		#Bit of permutation clusterfuck; TODO: change computations to match new shapes
 		covs = torch.zeros_like(self.chols)
-		covs = torch.bmm(self.chols, self.chols.permute(1,0,2))
-
+		covs = torch.bmm(self.chols.permute(2,0,1), self.chols.permute(2,1,0))
+		covs = covs.permute(1,2,0)
 
 		#GAINS:
 		gains = self.compute_gains(

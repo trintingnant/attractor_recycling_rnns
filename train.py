@@ -3,13 +3,13 @@ import pickle as pkl, os, sys, time
 from typing import Optional, Union, Tuple, List
 from torch.utils.data import DataLoader
 from rnn import RNN, save_rnn, load_rnn
-from utils import mse, zero_loss
+from utils import mse, zero_loss, build_regularisers
 import os, uuid
 
 #Okay: test, test, test ... remote, test... 
 
 PARAMS_2_LOG = ['w_rec', 'w_in']
-RAW_LOG_FREQ = 5
+RAW_LOG_FREQ = 50
 
 
 def train_rnn(model: RNN,
@@ -21,7 +21,8 @@ def train_rnn(model: RNN,
 				task_params: Optional[dict]=None,
 				verbose=True,
 				log_raw_data=False,
-				use_wandb=True
+				use_wandb=False,
+				retain_graph=False
 				) -> Union[List, Tuple[List, List, List]]:
 
 	if use_wandb:
@@ -43,13 +44,14 @@ def train_rnn(model: RNN,
 	if log_raw_data:
 		assert model_params is not None
 		assert task_params is not None
+		grads = []
+		params = [] 
 
 	dataloader = DataLoader(task, 
 		batch_size=training_params["batch_size"], 
 		shuffle=training_params["shuffle_dataset"])
 
 	n_epochs = training_params["n_epochs"]
-	display_epochs = np.floor(n_epochs / 25)
 
 	try:
 		loss_func = training_params.get("loss_func")
@@ -108,32 +110,21 @@ def train_rnn(model: RNN,
 				training_params
 				)
 	"""
-	if log_raw_data:
-		grads = []
-		params = []
-
-	reg_fns = []
-	reg_lambdas = []
-	if training_params["use_l1_reg"]:
-		reg_fns.append(l1_loss)
-		reg_lambdas.append(training_params["lambda_l1"])
-
-	if training_params["use_l2_reg"]:
-		reg_fns.append(l2_loss)
-		reg_lambdas.append(training_params["lambda_l2"])
-
-	if training_params["use_l1_cov_reg"]:
-		#only makes sense for MF models
-		assert(model.params["mean_field"]==True)
-		reg_fns.append(l1_cov_loss)
-		reg_lambdas.append(training_params["lambda_l1_cov"])
-
-	if training_params["use_l2_cov_reg"]:
-		#only makes sense for MF models
-		assert(model.params["mean_field"]==True)
-		reg_fns.append(l2_cov_loss)
-		reg_lambdas.append(training_params["lambda_l2_cov"])
-
+	regs = [
+		training_params.get("use_l1_reg", False),
+		training_params.get("use_l2_reg", False),
+		training_params.get("use_l1_cov_reg", False),
+		training_params.get("use_l2_cov_reg", False)
+		]
+	
+	reg_lambdas = [
+		training_params.get("lambda_l1", 0.0),
+		training_params.get("lambda_l2", 0.0),
+		training_params.get("lambda_l1_cov", 0.0),
+		training_params.get("lambda_l2_cov", 0.0)
+		]
+	
+	reg_fns = build_regularisers(regs)
 	start_time = time.time()
 	loss_prev = np.infty
 	model.train() 
@@ -150,7 +141,6 @@ def train_rnn(model: RNN,
 			break
 
 		for x, y, m in dataloader:
-
 			#forward pass
 			if float_precision:
 				rates, y_pred = model(x.float(), init_hidden)
@@ -163,7 +153,6 @@ def train_rnn(model: RNN,
 
 			#gradient descent
 			loss = loss_func(y_pred, y, m)
-			print(len(reg_fns))
 			if len(reg_fns) != 0:
 				reg_losses = torch.tensor(
 					[reg_fn(rates[:,1:], covs=model.rnn.covs)
@@ -171,8 +160,8 @@ def train_rnn(model: RNN,
 					]
 				)
 				loss += (reg_losses * reg_lambdas).sum()
-				
-			loss.backward()
+
+			loss.backward(retain_graph=retain_graph)
 
 			#log `raw` (!!!) grads and params every x steps
 			if log_raw_data :
@@ -206,13 +195,15 @@ def train_rnn(model: RNN,
 			wandb.log({"loss": loss_epoch})
 		losses.append(loss_epoch)
 
-		if verbose and i % display_epochs == 0 and i != 0:
+		if verbose:
 	
 			print(
-					f"epoch {i+1 :d} / {n_epochs}, \
-					time={time.time()-start_time :.5f}s, \
-					task_loss={loss_epoch}"
+					f'epoch {i+1 :d} / {n_epochs}\t'
+					f'time={time.time()-start_time :.5f}s\t'
+					f'task_loss={loss_epoch}',
+					end="\r"
 					)
+					
 		
 	print(f"\nDone: training took {time.time()-start_time:.1f} sec.")
 	model.eval()
@@ -230,27 +221,6 @@ def train_rnn(model: RNN,
 	#NOTE: this logging method is more or less whack. Can build logger?
 
 
-"""Define Regularizers"""
-
-def l2_loss(rates, **kwargs):
-	"""L2 loss on single unit firing rates"""
-	return torch.mean(rates**2)
-
-def l1_loss(rates, **kwargs):
-	"""L1 loss on single unit firing rates"""
-	return torch.mean(rates.abs())
-
-def l2_cov_loss(rates, **kwargs):
-	"""Promotes covariance matrices with small entries"""
-	covs = kwargs.get("covs", None)
-	l2_loss = torch.mean(covs**2)
-	return l2_loss.squeeze()
-
-def l1_cov_loss(rates, **kwargs):
-	"""Promotes covariance matrices with lots of 0s"""
-	covs = kwargs.get("covs", None)
-	l1_loss = torch.mean(covs.abs())
-	return l1_loss.squeeze()
 
 
 

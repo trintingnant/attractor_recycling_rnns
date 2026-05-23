@@ -801,6 +801,145 @@ def connectivity_scatter(vec1,
 
 
 
+def idx2connectivity_params(model, idxs1, idxs2):
+    conn_vecs = get_model_conn_vecs(model)
+    vecs1 = conn_vecs[idxs1, :]
+    vecs2 = conn_vecs[idxs2, :]
+    labels1 = np.array(build_labels(model))[idxs1]
+    labels2 = np.array(build_labels(model))[idxs2]
+
+    return vecs1, vecs2, labels1, labels2
+
+def connectivity_scatter_grid(
+        vecs1,
+        vecs2,
+        pops,
+        row_labels=[],
+        col_labels=[],
+        figsize=(13,13),
+        spacing=.14,
+        bins=50,
+        kde_bw="scott"
+):
+    from scipy.stats import gaussian_kde
+    nrows = vecs1.shape[0] 
+    ncols = vecs2.shape[0]
+    
+    cmap = plt.get_cmap(plt.rcParams["image.cmap"])
+    colors = cmap(np.linspace(0, 1, extract_num_pops(pops)))
+
+    hists = [dict(
+        color=colors[i],
+        alpha=.22
+        )
+        for i in range(extract_num_pops(pops))
+        ]
+
+    fig = plt.figure(figsize=figsize)
+
+    gs = GridSpec(
+        nrows + 1,
+        ncols + 1,
+        figure=fig,
+        width_ratios=[1] * ncols + [0.42],
+        height_ratios=[0.42] + [1] * nrows,
+        wspace=spacing,
+        hspace=spacing,
+    )
+
+    for i in range(nrows):
+        for j in range(ncols):
+            
+            ax = fig.add_subplot(gs[i+1, j])
+            connectivity_scatter(vecs1[i,:], vecs2[j,:], ax=ax, pops=pops)
+
+            if j != 0:
+                ax.set_yticks([])
+
+            if i != nrows - 1:
+                ax.set_xticks([])
+
+    #Add the marginals
+    
+    #top row
+    for j in range(ncols):
+
+        ax_top = fig.add_subplot(gs[0, j])
+        for p in set(pops):
+            #hists
+            ax_top.hist(vecs2[j,:][pops==p], bins=bins, density=True, **hists[p])
+
+        # KDE fits
+        grid = np.linspace(
+            min([vecs2[j,:][pops==p].min() for p in pops]),
+            max([vecs2[j,:][pops==p].max() for p in pops]),
+            300,
+        )
+
+        kdes = [gaussian_kde(vecs2[j,:][pops==p], bw_method=kde_bw) for p in set(pops)]
+        [ax_top.plot(grid, kde(grid), lw=2, color=colors[idx]) for idx, kde in enumerate(kdes)]
+        
+        if j != 0:
+            ax_top.set_yticks([])
+
+        ax_top.set_xticks([])
+
+        ax_top.xaxis.set_label_position("top")
+
+        ax_top.set_xlabel(
+                col_labels[i],
+                fontsize=15,
+                labelpad=28,
+                va="center",
+            )
+
+
+    #right border
+    for i in range(nrows):
+
+        ax_right = fig.add_subplot(gs[i+1, ncols])
+        for p in set(pops):
+            #hists
+            ax_right.hist(vecs1[j,:][pops==p], bins=bins, density=True, orientation="horizontal", **hists[p])
+
+        # KDE fits
+        grid = np.linspace(
+            min([vecs1[j,:][pops==p].min() for p in pops]),
+            max([vecs1[j,:][pops==p].max() for p in pops]),
+            300,
+        )
+
+        kdes = [gaussian_kde(vecs1[j,:][pops==p], bw_method=kde_bw) for p in set(pops)]
+        [ax_right.plot(kde(grid), grid, lw=2, color=colors[idx]) for idx, kde in enumerate(kdes)]
+
+        if i != nrows - 1:
+            ax_right.set_xticks([])
+
+        ax_right.set_yticks([])
+
+        # row labels on right
+        if row_labels is not None:
+
+            ax_right.yaxis.set_label_position("right")
+
+            ax_right.set_ylabel(
+                row_labels[i],
+                fontsize=15,
+                rotation=270,
+                labelpad=28,
+                va="center",
+            )
+
+    plt.show()
+
+def connectivity_scatter_from_idxs(model, idxs1, idxs2, pops): 
+
+    #it's better to have pops seoparately passed, for sanity checks
+    vecs1, vecs2, labels1, labels2 = idx2connectivity_params(model, idxs1, idxs2)
+    connectivity_scatter_grid(vecs1, vecs2, pops, labels1, labels2)
+
+
+
 
 
 
