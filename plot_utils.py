@@ -551,6 +551,131 @@ def plot_vector_field_pca(input_=None,
     except:
         pass
 
+def plot_vector_field_MF(model, 
+                         input, 
+                         trnst=0,
+                         num_points=50,
+                         xlims=[-1,1],
+                         ylims=[-1,1],
+                         find_fps=False,
+                         num_fp_trials=20,
+                         dist_thresh=1e-2,
+                         ax=None
+                         ):
+    
+    from utils import compute_deltas, g
+    plotstyle.use("general", 25)
+    if ax is None:
+        fig, ax = plt.subplots(1,1)
+    
+    ax.set_xlabel(r"$\kappa_{1}$")
+    ax.set_ylabel(r"$\kappa_{2}$")
+    """
+    ax.tick_params(left=False, 
+                   bottom=False, 
+                   labelleft=False, 
+                   labelbottom=False)
+    """
+
+    assert (model.rnn.rank == 2)
+    r = model.rnn.rank
+    in_dim = model.rnn.in_dim
+    weights = model.rnn.weights.detach().numpy()
+    covs = model.rnn.covs.detach().numpy()
+    nidx = r
+    Iidx = 2*r
+    Widx = 2*r + in_dim
+
+    #create grid on which to evaluate flow field
+    xs = np.linspace(*xlims, num_points)
+    ys = np.linspace(*ylims, num_points)
+
+    #set up flow field
+    vfield = np.zeros((num_points, num_points, 2))
+    #dynamix
+    def dkdt(k) :
+    
+        if len(k.shape)==1:
+            k = k.reshape(1, k.shape[0])
+        K = k[:,:2]
+        V = k[:,2:]
+        rec_input = np.stack(
+    						(np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, :nidx,:], K),
+     						np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, Iidx:Widx,:], V) 
+     						)
+						)
+        
+        gains = g(compute_deltas(model, k))
+        rec_input = (rec_input * weights * gains).sum(axis=(0,3))
+        dkdt = -K + rec_input
+        return dkdt
+   
+    for i, x in enumerate(xs):
+        for j, y in enumerate(ys):
+            z = np.array([x,y])
+            k = np.hstack((z, input[0,:]))[np.newaxis,:]
+            flow = dkdt(k)
+            vfield[j,i, 0] = flow[:,0][0]
+            vfield[j,i, 1] = flow[:,1][0]
+
+    ax.streamplot(ys, xs, vfield[:,:,0], vfield[:,:,1], color='white', zorder=0)
+    norm = np.sqrt(vfield[:,:,0]**2 + vfield[:,:,1]**2)
+    X, Y = np.meshgrid(xs, ys)
+    ax.pcolor(X, Y, norm, cmap='bone', zorder=-1)
+    rates, _ = run_rnn(model, torch.from_numpy(input))
+    ax.plot(rates[0,trnst:,0], rates[0,trnst:,1], c='hotpink')
+
+    #find fixed points, i.e. roots of dkdt
+    if find_fps:
+            
+        def DKDT(k, input):
+            """
+            This is the function passed to the root solver
+            """
+
+            k_full = torch.from_numpy(
+                        np.hstack((
+                            np.expand_dims(k, axis=0), 
+                            np.expand_dims(input, axis=0)
+                            ))
+                        ).to(torch.float32)
+            dkdt_ = dkdt(k_full)
+            return dkdt_[0,:2].detach().numpy()
+    
+        from scipy.optimize import root
+
+        X_grid, Y_grid = np.meshgrid(
+                                np.linspace(xlims[0], xlims[1], int(np.sqrt(num_fp_trials))),
+                                np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
+                                )
+        fps = []
+        for i in range(X_grid.ravel().size):
+            x0 = np.array([X_grid.ravel()[i], Y_grid.ravel()[i]])
+            #again, assume input equilibriates
+            sol = root(DKDT, x0=x0, args=input[trnst,:])
+            if all([np.linalg.norm(sol.x - other.x) > dist_thresh for other in fps]):
+                fps.append(sol)
+
+        for fp_sol in fps:
+            ax.scatter(fp_sol.x[0], fp_sol.x[1], marker="^", c="hotpink")
+            
+            k = np.hstack(
+                        (fp_sol.x,
+                         input[trnst,:]
+                        )
+            )
+            """
+            gains = compute_deltas(model, k)
+            from scipy.optimize._numdiff import approx_derivative
+            Jac = approx_derivative(DKDT, k, args=(input,), method="2-point")
+            print(Jac)
+            #Jac = -np.eye(model.rnn.rank) + np.sum(covs[:nidx, nidx:Iidx,:] * gains, axis=2)
+            #eigvals, _= np.linalg.eig(Jac)
+            print(eigvals)
+            """
+
+    return ax
+
 
 
 
