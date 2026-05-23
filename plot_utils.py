@@ -893,6 +893,7 @@ def connectivity_scatter(vec1,
     return ax
 
 def idx2connectivity_params(model, idxs1, idxs2):
+    from utils import get_model_conn_vecs
     conn_vecs = get_model_conn_vecs(model)
     vecs1 = conn_vecs[idxs1, :]
     vecs2 = conn_vecs[idxs2, :]
