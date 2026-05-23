@@ -622,6 +622,13 @@ class MeanFieldRNNCell(nn.Module):
 		
 		return meanfield_model
 	
+	def set_cov(self):
+		"""convenience function for resetting cov post training"""
+		covs = torch.bmm(self.rnn.covs.permute(2,0,1), self.rnn.covs.permute(2,1,0))
+		covs = covs.permute(1,2,0)
+		with torch.no_grad():
+			self.rnn.covs.set_(covs)
+	
 	@classmethod
 	def init_from_covs(cls, params, covs, cov_init_noise=0, **kwargs):
 
@@ -858,11 +865,7 @@ def shuffle(model):
 
 def sample(means, covs, N, weights, keep_means=True):
 
-	loadings = np.zeros(covs.shape[0], N)
-
-	if keep_means:
-		for i in range(covs.shape[2]):
-			loadings = np.random.multivariate_normal(means[i], covs[...,i], size=int(weights[i]*N))
+	pass 
 
 
 
