@@ -503,19 +503,19 @@ def make_MF_covs_pop_dyn(cov_params):
                     [0, sdM, -sdOm, sdR, 0, 0, -sdmW, sdmW],
                     [sdR, -sdOm, sdM, 0, sdnI, sdnI, 0, -sdnW],
                     [sdOm, sdR, 0, sdM, sdnI, sdnI, -sdnW, 0],
-                    [0, 0, sdnI, sdnI, sdI, 0, 0, 0],
+                    [0, 0, sdnI, sdnI, 0, 0, 0, 0],
                     [0, 0, sdnI, sdnI, 0, sdI, 0, 0],
                     [-sdmW, -sdmW, 0, -sdnW, 0, 0, sdW, 0],
                     [-sdmW, sdmW, -sdnW, 0, 0, 0, 0, sdW]]
                     )
     
     
-    cov2 = np.array([[sdM, 0, sdR, -sdOm, 0, 0, -sdmW, -sdmW],
-                    [0, sdM, sdOm, sdR, 0, 0, -sdmW, sdmW],
+    cov2 = np.array([[sdM, 0, sdR, -sdOm, 0, 0, sdmW, -sdmW],
+                    [0, sdM, sdOm, sdR, 0, 0, sdmW, sdmW],
                     [sdR, sdOm, sdM, 0, sdnI, sdnI, -sdnW, 0],
                     [-sdOm, sdR, 0, sdM, sdnI, sdnI, 0, sdnW],
                     [0, 0, sdnI, sdnI, sdI, 0, 0, 0],
-                    [0, 0, sdnI, sdnI, 0, sdI, 0, 0],
+                    [0, 0, sdnI, sdnI, 0, 0, 0, 0],
                     [-sdmW, -sdmW, 0, -sdnW, 0, 0, sdW, 0],
                     [-sdmW, sdmW, sdnW, 0, 0, 0, 0, sdW]]
                     )

@@ -624,10 +624,10 @@ class MeanFieldRNNCell(nn.Module):
 	
 	def set_cov(self):
 		"""convenience function for resetting cov post training"""
-		covs = torch.bmm(self.rnn.covs.permute(2,0,1), self.rnn.covs.permute(2,1,0))
+		covs = torch.bmm(self.chols.permute(2,0,1), self.chols.permute(2,1,0))
 		covs = covs.permute(1,2,0)
 		with torch.no_grad():
-			self.rnn.covs.set_(covs)
+			self.covs.set_(covs)
 	
 	@classmethod
 	def init_from_covs(cls, params, covs, cov_init_noise=0, **kwargs):

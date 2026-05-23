@@ -992,7 +992,7 @@ def connectivity_scatter_grid(
         ax_right = fig.add_subplot(gs[i+1, ncols])
         for p in set(pops):
             #hists
-            ax_right.hist(vecs1[j,:][pops==p], bins=bins, density=True, orientation="horizontal", **hists[p])
+            ax_right.hist(vecs1[i,:][pops==p], bins=bins, density=True, orientation="horizontal", **hists[p])
 
         # KDE fits
         grid = np.linspace(
