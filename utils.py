@@ -700,9 +700,9 @@ def compute_gammas(model, inputs):
     gammas = phiPrime(rates)
     return gammas
 
-def compute_gains(model, k):
+def compute_deltas(model, k):
 	"""
-	computes gains of populations for MeanFieldRNNCells
+	computes deltas of populations for MeanFieldRNNCells
 	NOTE: expects np.arrays 
 	NOTE: x is the full state vector of latents (including input latents)
 	TODO: streamline this with the rnn specific-functions
@@ -717,22 +717,26 @@ def compute_gains(model, k):
 	nidx = r
 	Iidx = 2*r
 	Widx = 2*r + in_dim
-	x = np.sum(
-			np.hstack(
+	deltas = np.sum(
+				np.hstack(
 					(
 					np.einsum('...iik, ...li -> ...lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
 					np.einsum('...iik, ...li -> ...lik', covs[:nidx, :nidx, :], K**2)
-					)
-					), axis=1
-				)
+					), 
+				), axis=1
+			)
+	
+	return deltas
 
+def g(deltas):
+	"""Gaussian integral"""
+	return 1 / np.sqrt(1 + (np.pi / 2) * deltas)
 	
-	gains = 1/ np.sqrt(1 + (np.pi / 2) * x)
-	
-	#right now return raw gains, i.e. gains per population: let's see if that makes the most sense
-	return gains
-	
+def gPrime(deltas):
+	"""Derivative of g"""
+	return -(np.pi / 2) * g(deltas)**3
 
+#===============MISCELLANEOUS===================
 
 def build_state_dicts_from_params(params, idx):
     from collections import OrderedDict
