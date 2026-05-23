@@ -21,7 +21,7 @@ import plotstyle
 
 NUM_ANGLES = 25
 
-#=======GENERAL UTILITY FUNCTIONS FOR AX MANIPULATION========
+#=======GENERAL UTILITY FUNCTIONS FOR AX AND COLOR MANIPULATION========
 
 def center(ax):
     ax.spines['top'].set_visible(False)
@@ -34,6 +34,16 @@ def center(ax):
 
 def make_naked(ax):
     ax.axis('off')
+
+def set_colors(num_colors):
+
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    base_colors = prop_cycle.by_key()['color']
+    idxs = np.linspace(0, len(base_colors)-1, num_colors, dtype=int)
+    colors = [base_colors[idx] for idx in idxs]
+
+    return colors
+
 
 #=======REGULAR PLOT UTILS=====================
 
@@ -110,6 +120,100 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
     plt.show()
     return fig, ax
 
+def plot_input_interpolation(num_angles):
+    
+    fig, ax = plt.subplots(
+    subplot_kw={"projection": "polar"},
+    figsize=(7, 7),
+    )
+
+    ax.set_thetamin(0)
+    ax.set_thetamax(90)
+
+    # Tick locations
+    ticks = np.array([0, 15, 30, 45, 60, 75, 90])
+
+    # Convert to radians
+    ax.set_xticks(np.deg2rad(ticks))
+
+    # Pi-style labels
+    ax.set_xticklabels([
+        r"$0$",
+        r"$\frac{\pi}{12}$",
+        r"$\frac{\pi}{6}$",
+        r"$\frac{\pi}{4}$",
+        r"$\frac{\pi}{3}$",
+        r"$\frac{5\pi}{12}$",
+        r"$\frac{\pi}{2}$",
+    ])
+
+    ax.set_ylim(0, 1)
+
+    angles = [
+        (0, r"$0$"),
+        (np.pi/6, r"$\frac{\pi}{6}$"),
+        (np.pi/4, r"$\frac{\pi}{4}$"),
+        (np.pi/3, r"$\frac{\pi}{3}$"),
+        (np.pi/2, r"$\frac{\pi}{2}$"),
+    ]
+
+    ax.set_xticks([a for a, _ in angles])
+    ax.set_xticklabels([lab for _, lab in angles])
+
+    arrow_angles = np.linspace(0, np.pi/2, num_angles)
+    colors = set_colors(num_angles)
+
+    for theta, c in zip(arrow_angles, colors):
+
+        ax.annotate(
+            "",
+            xy=(theta, 1.0),     
+            xytext=(theta, 0.0), 
+            arrowprops=dict(
+                arrowstyle="-|>",
+                lw=2.5,
+                color=c,
+                shrinkA=0,
+                shrinkB=0,
+            ),
+        )
+
+    theta = np.linspace(0, np.pi/4, 200)
+    r = 0.4
+
+    ax.plot(theta, np.full_like(theta, r), 
+            lw=1, 
+            linestyle="--", 
+            c="black", 
+            alpha=.4,
+            zorder=100
+            )
+
+    ax.plot([np.pi/4, np.pi/4], 
+            [0, r], 
+            lw=1, 
+            linestyle="--", 
+            c="black", 
+            alpha=.4,
+            zorder=100
+            )
+
+    ax.text(
+        np.pi/8,
+        .2,
+        r"$\psi$",
+        fontsize=24,
+        alpha=.5,
+        ha="center",
+        va="center",
+    )
+
+    ax.grid(True, alpha=0.35)
+    ax.spines["polar"].set_linewidth(2)
+
+    return ax
+
+
 def plot_multitask_net_response(model, trial, antitrial):
     fig, axs = plt.subplots(2,1, sharey=False, sharex=True) 
     trial, target, _ = trial
@@ -175,7 +279,6 @@ def plot_common_projections(model,
     ax.arrow(*projs[0,t], *(projs[0,t+dt]-projs[0,t]), head_width=axWidth/asp_ratio, lw=0, alpha=.8)
     
     return ax
-
 
 
 def create_common_projections_grid(model, 
@@ -842,7 +945,6 @@ def connectivity_scatter(vec1,
     from sklearn.linear_model import LinearRegression
     from utils import extract_num_pops, phiPrime
     
-
     pops = kwargs.get('pops', np.zeros(len(vec1)))
     num_pops = extract_num_pops(pops)
     prop_cycle = plt.rcParams['axes.prop_cycle']
