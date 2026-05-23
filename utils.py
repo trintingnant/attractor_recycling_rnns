@@ -492,7 +492,7 @@ def make_MF_covs_pop_dyn(cov_params):
     sdOm = cov_params["sdOm"] #covariance of the off-diagonal elements -> set frequency (i.e. clockwise vs. counter-clockwise)
     sdI = cov_params["sdI"] #variance of the respective inputs, one per pop
     sdmW = cov_params["sdmW"] #covariance of the recurrent- and output directions
-    sdnI = cov_params["sdI"] #covariance between the input-selection and input vectors
+    sdnI = cov_params["sdnI"] #covariance between the input-selection and input vectors
     sdnW = cov_params["sdnW"] #covariance between the input selection vectors and the ouputs.
     sdW = cov_params["sdW"] #variance of the output vectors (should be roughly OOM as sdM)
     
