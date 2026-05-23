@@ -600,14 +600,15 @@ def plot_vector_field_MF(model,
                          input[trnst,:]
                         )
             )
-
-            gains = compute_gains(model, k)
+            """
+            gains = compute_deltas(model, k)
             from scipy.optimize._numdiff import approx_derivative
             Jac = approx_derivative(DKDT, k, args=(input,), method="2-point")
             print(Jac)
             #Jac = -np.eye(model.rnn.rank) + np.sum(covs[:nidx, nidx:Iidx,:] * gains, axis=2)
             #eigvals, _= np.linalg.eig(Jac)
             print(eigvals)
+            """
 
     return ax
     
