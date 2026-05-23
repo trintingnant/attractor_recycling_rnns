@@ -1,0 +1,18 @@
+
+#This style only removes spines, ticks etc.
+
+axes.grid: False
+
+xtick.major.width: 0
+ytick.major.width: 0
+xtick.labelsize: 0
+ytick.labelsize: 0
+
+axes.spines.left: false
+axes.spines.right: false
+axes.spines.bottom: false
+axes.spines.top: false
+
+
+
+
