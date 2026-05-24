@@ -115,7 +115,6 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
     ax.scatter(0,0, facecolors=None, c='grey', alpha=.2, zorder=-1)
     ax.plot()
     ax.legend()
-    
 
     plt.show()
     return fig, ax
@@ -704,6 +703,7 @@ def plot_vector_field_MF(model,
                          input[trnst,:]
                         )
             )
+        
             """
             gains = compute_deltas(model, k)
             from scipy.optimize._numdiff import approx_derivative
@@ -713,8 +713,12 @@ def plot_vector_field_MF(model,
             #eigvals, _= np.linalg.eig(Jac)
             print(eigvals)
             """
+    if find_fps:
+        return ax, fps
+    
+    else:
+        return ax
 
-    return ax
     
 def plot_input_interpolation_lr(model, 
                                 inputs, 
@@ -745,8 +749,6 @@ def plot_input_interpolation_lr(model,
         pass
 
     plt.show()
-
-
 
 def plot_traj_similarity(model, inputs, base_idx=0, num_angles=NUM_ANGLES, trnst=100):
 

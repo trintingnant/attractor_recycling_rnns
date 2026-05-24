@@ -695,6 +695,17 @@ def make_MF_covs_attr_inhib (cov_params):
 	"""
 	return cov
 
+def extract_idxs(model):
+
+	r = model.rnn.rank
+	in_dim = model.rnn.in_dim
+	nidx = r
+	Iidx = 2 * r
+	Widx = 2 * r + in_dim
+
+	return nidx, Iidx, Widx
+
+
 def compute_gammas(model, inputs):
     rates, out = run_rnn(model, inputs)
     gammas = phiPrime(rates)
@@ -707,16 +718,13 @@ def compute_deltas(model, k):
 	NOTE: x is the full state vector of latents (including input latents)
 	TODO: streamline this with the rnn specific-functions
 	"""
-	r = model.rnn.rank
-	in_dim = model.rnn.in_dim 
+	
 	covs = model.rnn.covs.detach().numpy() 
 
 	K = k[:,:r]
 	V = k[:,r:]
 	V 
-	nidx = r
-	Iidx = 2*r
-	Widx = 2*r + in_dim
+	nidx, Iidx, Widx = extract_idxs(model)
 	deltas = np.sum(
 				np.hstack(
 					(
@@ -735,6 +743,45 @@ def g(deltas):
 def gPrime(deltas):
 	"""Derivative of g"""
 	return -(np.pi / 2) * g(deltas)**3
+
+def compute_fixed_point_simple(model, in_):
+	"""
+	alternative to the fp-finder class for really low-d models
+	"""
+	from scipy.optimize import root
+	pass
+
+def compute_jacobian_mf_analytical(model, k, in_):
+	"""
+	return the jacobian of the model dynamics at k, with input in_
+	Args:
+		model: the model
+		k: np.array[rank] -> the fixed point 
+		in_: np.array[in_dim] -> the input
+	Return:
+		S: np.array[rank x rank] -> the jacobian
+
+	"""
+	nidx, Iidx, Widx = extract_idxs(model)
+	#this is just for the delta computation
+	k_ = np.hstack((np.expand_dims(k, axis=0),
+               np.expand_dims(in_, axis=0))
+			)
+
+	covs = model.rnn.covs.detach().numpy()
+	weights = model.rnn.weights.unsqueeze(dim=0).detach().numpy().astype(np.float64)
+	deltas = compute_deltas(model, k_)
+	S = -np.eye(model.rnn.rank)
+	S += (covs[nidx:Iidx, :nidx, :] * g(deltas) * weights).sum(axis=2)
+
+	#Correction term
+	sk = (np.einsum('ijk, j -> ik', covs[nidx:Iidx, :nidx, :], k)
+		+ np.einsum('ijk, j -> ik', covs[nidx:Iidx, Iidx:Widx], in_)
+		) 
+	sk += np.einsum('iik, i -> ik', covs[:nidx, :nidx, :], k)
+	S += (sk * gPrime(deltas)**3 * weights)
+
+	return S
 
 #===============MISCELLANEOUS===================
 
