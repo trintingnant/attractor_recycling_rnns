@@ -10,7 +10,6 @@ import numpy as np
 from sklearn.decomposition import PCA
 from utils import * 
 
-
 #PATHS
 import sys
 sys.path.append('../FixPointSearch')
@@ -212,6 +211,56 @@ def plot_input_interpolation(num_angles):
 
     return ax
 
+def plot_traj_similarity(rates, base_idx=0, trnst=0):
+
+    from fractions import Fraction
+    from matplotlib.ticker import FixedLocator
+    from utils import compute_rate_similarity
+
+    sims = compute_rate_similarity(rates, base_idx, trnst)
+
+    colors = set_colors(rates.shape[0])
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    angles = np.linspace(0, np.pi/2, rates.shape[0])
+    ax.set_xlim(0, np.pi/2)
+    ticks = np.arange(0, np.pi/2+np.pi/8, np.pi/8)
+    ax.xaxis.set_major_locator(FixedLocator(ticks))
+
+    ax.scatter(angles, sims, c=colors, marker='s')
+    ax.plot(angles, sims, c='silver', linestyle='--', alpha=.5, zorder=0)
+    ax.set_ylim(min(sims)-.1 * min(sims), max(sims)+.1 * max(sims))
+    ax.scatter(
+        0,
+        sims[0],
+        s=150,               
+        facecolors='none',   
+        edgecolors='black',   
+        linewidths=.5,
+        label="reference"
+    )
+
+    labels = []
+    for t in ticks:
+        frac = Fraction(t / np.pi).limit_denominator()
+        n, d = frac.numerator, frac.denominator
+        if n == 0:
+            labels.append(r"$0$")
+        elif d == 1:
+            if n == 1:
+                labels.append(r"$\pi$")
+            else:
+                labels.append(rf"${n}\pi$")
+        else:
+            if n == 1:
+                labels.append(rf"$\frac{{\pi}}{{{d}}}$")
+            else:
+                labels.append(rf"$\frac{{{n}\pi}}{{{d}}}$")
+
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels)
+
+    return ax
 
 def plot_multitask_net_response(model, trial, antitrial):
     fig, axs = plt.subplots(2,1, sharey=False, sharex=True) 
@@ -223,11 +272,11 @@ def plot_multitask_net_response(model, trial, antitrial):
     axs[0].set_xlim(0, 200)
     axs[0].plot(out.detach().numpy()[0,:,:], c="b", alpha=.5)
     axs[0].plot(target, "-.", c="black", alpha=.5)
-    axs[1].set_title('Antitask')
+    #axs[1].set_title('Antitask')
     axs[1].plot(antiout.detach().numpy()[0,:,:], c="r", alpha=.5)
     axs[1].plot(antitarget, "-.", c="black", alpha=.5)
 
-    axs[0].set_title('Task')
+    #axs[0].set_title('Task')
     plt.tight_layout(w_pad=1.5, h_pad=1.5)
     plt.show() 
 
@@ -682,7 +731,6 @@ def plot_vector_field_MF(model,
             return dkdt_[0,:2].detach().numpy()
     
         from scipy.optimize import root
-
         X_grid, Y_grid = np.meshgrid(
                                 np.linspace(xlims[0], xlims[1], int(np.sqrt(num_fp_trials))),
                                 np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
@@ -750,69 +798,6 @@ def plot_input_interpolation_lr(model,
 
     plt.show()
 
-def plot_traj_similarity(model, inputs, base_idx=0, num_angles=NUM_ANGLES, trnst=100):
-
-    """
-    Computes and plots similarity of RNN trajectories for different inputs, as
-    computed through alignment of SVD components
-    """
-
-    import matplotlib.ticker as tck
-    num_inputs = inputs.shape[0]
-    plt.rcParams["axes.prop_cycle"] = plt.cycler("color", plt.cm.coolwarm(np.linspace(0,1, num_inputs)))
-    colors1 = plt.cm.coolwarm(np.linspace(0, 1, inputs.shape[0]))
-
-    num_inputs = inputs.shape[0]
-    rates, out = model(inputs[0, :, :].unsqueeze(dim=0))
-    ratess = torch.zeros((num_inputs, *rates.shape[1:]))
-    ratess[0, :] = rates
-    
-    for inputs_idx in range(1, num_inputs):
-        rates, out = model(inputs[inputs_idx, :, :].unsqueeze(dim=0))
-        ratess[inputs_idx, :, :] = rates.squeeze()
-    
-    #base rates for comparison
-    rates_base = ratess[base_idx,trnst:,:].detach().numpy().squeeze()
-    U_base, S_base, V_base = np.linalg.svd(rates_base)
-    sims = []
-
-    #this is just for the tickering -> TODO: convert to pi
-    angles = np.array([np.arccos(inputs[idx,0,0] / np.linalg.norm(inputs[idx,0,0])) for idx in range(inputs.shape[0])])
-    angle = angles[0]
-    angles = [np.angle(complex(np.cos(angle), np.sin(angle)), deg=True) for angle in angles] 
-
-    calc_m = lambda rates_base, rates, S_base, S: np.linalg.norm(
-            rates_base @ rates.T
-            ) \
-               / np.linalg.norm(
-                    np.multiply(S_base,S)
-                )
-    
-    #calculate alignments for all inputs and store 
-    for input_idx in range(num_inputs):
-        U, S, V = np.linalg.svd(ratess[input_idx,trnst:,:].detach().numpy().squeeze())
-        rates_idx = ratess[input_idx,trnst:,:].detach().numpy().squeeze()
-        m = calc_m(rates_base, rates_idx, S_base, S)
-        sims.append(m)
-
-
-    #actual plotting
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    res = sims 
-    ax.scatter(angles[0], res[0], color=colors1[0], marker='s', label="reference")
-    ax.scatter(angles[1:], res[1:], color=colors1[1:], marker='s')
-    #ax.xaxis.set_major_formatter(tck.FormatStrFormatter('%g $^\circ$'))    
-    ax.set_xlabel(r"$\phi$ in deg")
-    ax.set_ylabel(r"Sim = $\frac{\left \| X_0 X \right \|_F}{\left \| S_0  S \right \|_F}$", size=20, labelpad=10)
-    ax.plot(angles, sims / max(sims), color='black', alpha=.6, zorder=-1)
-    #ax.axvline(45, linestyle = '-.', color='black', alpha=.5)
-    #ax.axhline(.5, linestyle = '-.', color='black', alpha=.5)
-    res = sims / max(sims)
-    ax.legend()
-    
-    return ax
-
 def lower_triangular_heatmap(covs, 
                              eps=0.2, 
                              eps_var=2.0, 
@@ -828,8 +813,8 @@ def lower_triangular_heatmap(covs,
     
     #for text color luminance-control
     import matplotlib.colors as mcolors
-    cmap1 = plt.get_cmap('PRGn')
-    cmap2 = plt.get_cmap('hot')
+    cmap1 = plt.get_cmap('hotpink_grey')
+    cmap2 = plt.get_cmap('mint_darkgreen')
 
 
     _, num_features, num_pops = covs.shape
@@ -856,9 +841,9 @@ def lower_triangular_heatmap(covs,
             axs[0,popIdx].spines["bottom"].set_visible(False)
             axs[0,popIdx].spines["left"].set_visible(False)
 
-            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='PRGn')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap=cmap1)
             norm = im.norm
-            imv = axs[0,popIdx].imshow(mask_variance, cmap='hot')
+            imv = axs[0,popIdx].imshow(mask_variance, cmap=cmap2)
             normv = imv.norm 
 
             if labels is not None:
@@ -875,9 +860,9 @@ def lower_triangular_heatmap(covs,
             axs[0,popIdx].set_title(f'Population {popIdx+1}', pad=12.5)
         
 
-            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='PRGn')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap=cmap1)
             norm = im.norm
-            imv = axs[0,popIdx].imshow(mask_variance, cmap='hot')
+            imv = axs[0,popIdx].imshow(mask_variance, cmap=cmap2)
             normv = imv.norm
 
         if put_text:

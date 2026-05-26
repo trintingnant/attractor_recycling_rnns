@@ -714,22 +714,20 @@ def compute_gammas(model, inputs):
 def compute_deltas(model, k):
 	"""
 	computes deltas of populations for MeanFieldRNNCells
-	NOTE: expects np.arrays 
-	NOTE: x is the full state vector of latents (including input latents)
-	TODO: streamline this with the rnn specific-functions
 	"""
 	
 	covs = model.rnn.covs.detach().numpy() 
+	
 
-	K = k[:,:r]
-	V = k[:,r:]
-	V 
+	K = k[:,:model.rnn.rank]
+	V = k[:,model.rnn.rank:]
+	
 	nidx, Iidx, Widx = extract_idxs(model)
 	deltas = np.sum(
 				np.hstack(
 					(
-					np.einsum('...iik, ...li -> ...lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
-					np.einsum('...iik, ...li -> ...lik', covs[:nidx, :nidx, :], K**2)
+					np.einsum('iik, li -> lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
+					np.einsum('iik, li -> lik', covs[:nidx, :nidx, :], K**2)
 					), 
 				), axis=1
 			)
@@ -744,13 +742,73 @@ def gPrime(deltas):
 	"""Derivative of g"""
 	return -(np.pi / 2) * g(deltas)**3
 
-def compute_fixed_point_simple(model, in_):
+def compute_fixed_point_simple(model,
+							   in_,
+							   xlims=[-1,1],
+							   ylims=[-1,1],
+							   trnst=0,
+							   num_fp_trials=20,
+							   dist_thresh=1e-2
+							   ):
 	"""
-	alternative to the fp-finder class for really low-d models
+	alternative to the fp-finder class for really low-d models (i.e. meanfields)
 	"""
+	#TODO: integrate this into plotting func.
 	from scipy.optimize import root
-	pass
 
+	def dkdt(k):
+    
+		if len(k.shape)==1:
+			k = k.reshape(1, k.shape[0])
+
+		K = k[:,:2]
+		V = k[:,2:]
+		rec_input = np.stack(
+							(np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, :nidx,:], K),
+							np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, Iidx:Widx,:], V) 
+							)
+						)
+
+		gains = g(compute_deltas(model, k))
+		rec_input = (rec_input * weights * gains).sum(axis=(0,3))
+		dkdt = -K + rec_input
+		return dkdt
+	
+            
+	def DKDT(k, input):
+		"""
+		This is the function passed to the root solver
+		"""
+
+		k_full = torch.from_numpy(
+					np.hstack((
+						np.expand_dims(k, axis=0), 
+						np.expand_dims(input, axis=0)
+						))
+					).to(torch.float32)
+		dkdt_ = dkdt(k_full)
+		return dkdt_[0,:2].detach().numpy()
+
+	X_grid, Y_grid = np.meshgrid(
+							np.linspace(xlims[0], xlims[1], int(np.sqrt(num_fp_trials))),
+							np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
+							)
+	fps = []
+	for i in range(X_grid.ravel().size):
+		x0 = np.array([X_grid.ravel()[i], Y_grid.ravel()[i]])
+		#again, assume input equilibriates
+		sol = root(DKDT, x0=x0, args=input[trnst,:])
+		if all([np.linalg.norm(sol.x - other.x) > dist_thresh for other in fps]):
+			fps.append(sol)
+
+	jacs = []
+	for fp in fps:
+		k = fp.x
+		jac = compute_jacobian_mf_analytical(model, k, in_)
+		jacs.append(jac)
+
+	return fps, jacs
+	
 def compute_jacobian_mf_analytical(model, k, in_):
 	"""
 	return the jacobian of the model dynamics at k, with input in_
@@ -781,7 +839,7 @@ def compute_jacobian_mf_analytical(model, k, in_):
 	sk += np.einsum('iik, i -> ik', covs[:nidx, :nidx, :], k)
 	S += (sk * gPrime(deltas)**3 * weights)
 
-	return S
+	return S.sum(axis=2)
 
 #===============MISCELLANEOUS===================
 
@@ -800,6 +858,23 @@ def reset_model_from_params_idx(model, params, idx):
 	"""
 	state_dict = build_state_dicts_from_params(params, idx)
 	model.load_state_dict(state_dict, strict=False)
+
+def compute_rate_similarity(rates, base_idx, trnst):
+
+	base_idx = 0
+	trnst = 0
+	_, S_base, _ = np.linalg.svd(rates[base_idx, trnst:,:])
+	sims = []
+
+	for idx in range(rates.shape[0]):
+		U, S, V = np.linalg.svd(rates[idx,trnst:,:])
+		sim = (np.linalg.norm(rates[base_idx,...] @ rates[idx, ...].T) 
+		 		/ np.linalg.norm(np.multiply(S, S_base))
+			)
+		sims.append(sim)
+
+	return sims
+
 
 
 
