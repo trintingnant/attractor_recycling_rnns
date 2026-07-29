@@ -705,12 +705,6 @@ def extract_idxs(model):
 
 	return nidx, Iidx, Widx
 
-
-def compute_gammas(model, inputs):
-    rates, out = run_rnn(model, inputs)
-    gammas = phiPrime(rates)
-    return gammas
-
 def compute_deltas(model, k):
 	"""
 	computes deltas of populations for MeanFieldRNNCells
@@ -750,14 +744,20 @@ def compute_fixed_point_simple(model,
 							   num_fp_trials=20,
 							   dist_thresh=1e-2
 							   ):
+	
 	"""
 	alternative to the fp-finder class for really low-d models (i.e. meanfields)
 	"""
+
 	#TODO: integrate this into plotting func.
 	from scipy.optimize import root
 
 	def dkdt(k):
-    
+		
+		nidx, Iidx, Widx = extract_idxs(model)
+		weights = model.rnn.weights.detach().numpy()
+		covs = model.rnn.covs.detach().numpy()
+		
 		if len(k.shape)==1:
 			k = k.reshape(1, k.shape[0])
 
@@ -768,7 +768,7 @@ def compute_fixed_point_simple(model,
 							np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, Iidx:Widx,:], V) 
 							)
 						)
-
+		
 		gains = g(compute_deltas(model, k))
 		rec_input = (rec_input * weights * gains).sum(axis=(0,3))
 		dkdt = -K + rec_input
@@ -793,22 +793,24 @@ def compute_fixed_point_simple(model,
 							np.linspace(xlims[0], xlims[1], int(np.sqrt(num_fp_trials))),
 							np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
 							)
+	
 	fps = []
 	for i in range(X_grid.ravel().size):
 		x0 = np.array([X_grid.ravel()[i], Y_grid.ravel()[i]])
+		
 		#again, assume input equilibriates
-		sol = root(DKDT, x0=x0, args=input[trnst,:])
+		sol = root(DKDT, x0=x0, args=in_)
 		if all([np.linalg.norm(sol.x - other.x) > dist_thresh for other in fps]):
 			fps.append(sol)
-
 	jacs = []
 	for fp in fps:
 		k = fp.x
 		jac = compute_jacobian_mf_analytical(model, k, in_)
 		jacs.append(jac)
-
-	return fps, jacs
 	
+	return fps, jacs
+
+
 def compute_jacobian_mf_analytical(model, k, in_):
 	"""
 	return the jacobian of the model dynamics at k, with input in_
@@ -839,7 +841,7 @@ def compute_jacobian_mf_analytical(model, k, in_):
 	sk += np.einsum('iik, i -> ik', covs[:nidx, :nidx, :], k)
 	S += (sk * gPrime(deltas)**3 * weights)
 
-	return S.sum(axis=2)
+	return S
 
 #===============MISCELLANEOUS===================
 
