@@ -11,9 +11,9 @@ from dataclasses import dataclass
 import torch, numpy as np
 from rnn import RNN, run_rnn
 from typing import Callable, NewType, Tuple, Optional
-from numpy import NdArray
+from numpy.typing import NDArray
 
-Array = NewType("Array", NdArray[np.floating])
+Array = NewType("Array", NDArray[np.floating])
 
 @dataclass
 class R2D3SolutionObject:
@@ -21,7 +21,6 @@ class R2D3SolutionObject:
     model: RNN
     inputs: torch.Tensor
     ridge: float
-    use_nattive_dxdt: False
     rank: int
 
     #outputs
@@ -33,11 +32,12 @@ class R2D3SolutionObject:
     predictors: Optional[Array]
     targets: Optional[Array]
     pred_targets: Optional[Array]
+    target_singular_values: Optional[Array]
+    connectivity_singular_values: Optional[Array]
 
     #metrics
     normalised_estimation_error: Optional[float]
-    target_singular_values: Optional[Array]
-    connectivity_singular_values: Optional[Array]
+    
 
     def __init__(self,
                 model,
@@ -69,8 +69,8 @@ class R2D3SolutionObject:
         self.predictors = predictors
         self.targets = targets
         self.pred_targets = pred_targets
-        self.normalised_estimation_error = normalised_estimation_error.
-        self.target_singular_values - target_singular_values,
+        self.normalised_estimation_error = normalised_estimation_error
+        self.target_singular_values = target_singular_values
         self.connectivity_singular_values = connectivity_singular_values
 
 
@@ -80,10 +80,9 @@ class R2D3SolutionObject:
     def _setup(cls, 
             model, 
             inputs,
-            rank
-            *, 
+            rank,
             ridge=0.0
-            ) -> R2D3SolutionObject:
+            ):
     
 
         return cls(model,
@@ -117,20 +116,20 @@ class R2D3SolutionObject:
 
 
 
-        if inputs.ndim <= 2:
-            inputs = inputs.unsqueeze(0)
+        if self.inputs.ndim <= 2:
+            self.inputs.unsqueeze(0)
 
-        n_conds, T, n_neurons = inputs.shape
         rates, out = run_rnn(self.model, self.inputs)
+        n_conds, T, n_neurons = rates.shape
         X_source = rates[:, :-1, :]
         X_target = rates[:, 1:, :]
         
         w_in = self.model.rnn.w_in
         alpha = self.model.rnn.alpha
-        w_in_scale = self.model.rnn.w_in_scale
+        w_in_scale = self.model.rnn.w_in_scale.item()
 
-        inputs_ = (inputs[;, :-1, :] @ w_in).detach().numpy()
-        Y_target = (X_target - (1 - alpha) * X_source) / alpha - w_in_scale * inputs_
+        inputs_ = (self.inputs[:, :-1, :] @ w_in).detach().numpy()
+        Y_target = (X_target - (1 - alpha) * X_source) / alpha - inputs_
 
         R = X_source.reshape(-1, n_neurons)
         Y = Y_target.reshape(-1, n_neurons)
@@ -148,8 +147,8 @@ class R2D3SolutionObject:
 
         _, singular_values, Vt = np.linalg.svd(Pred, full_matrices=False)
         self.target_singular_values = singular_values
-
-        V_rr = Vt[:self.rank]
+        
+        V_rr = Vt[:self.rank].T
         J_rr = J_full @ V_rr @ V_rr.T
         self.J_reconstructed = J_rr
 
@@ -163,6 +162,8 @@ class R2D3SolutionObject:
                 /  Y_norm
         )
 
+        self.normalised_estimation_error = normalised_estimation_error
+
 
         #recast as low-rank connectivity vecs
         U_new, connectivity_svs, Vt_new = \
@@ -174,16 +175,17 @@ class R2D3SolutionObject:
         self.connectivity_singular_values = connectivity_svs
         
         M_rr = loadings_scale[None, :] * U_new[:, :self.rank]
-        N_rr = loadings_scale[None, :] * Vt_new[:self.rank, :]
+        N_rr = loadings_scale[:, None] * Vt_new[:self.rank, :]
         self.M_rr = M_rr
         self.N_rr = N_rr
 
 
         #Lastly, refit the w_out to match outputs
-        out_targets = out[:,1: :].rehshape(-1, self.model.params["output_size"])
-        Gram_out = prediction.T @ prediction + ridge * np.eye(n_neurons)
+        out_targets = out[:,1: :].reshape(-1, self.model.params["output_size"])
+        Gram_out = prediction.T @ prediction + self.ridge * np.eye(n_neurons)
 
         #NOTE: needs to be multiplied with N when setting as out vector
+
         w_out_new = np.linalg.solve(Gram_out, prediction.T @ out_targets).T
 
         self.w_reconstructed = w_out_new
