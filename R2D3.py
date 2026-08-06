@@ -32,6 +32,7 @@ class R2D3SolutionObject:
     predictors: Optional[Array]
     targets: Optional[Array]
     pred_targets: Optional[Array]
+    predictions: Optional[Array]
     target_singular_values: Optional[Array]
     connectivity_singular_values: Optional[Array]
 
@@ -52,6 +53,7 @@ class R2D3SolutionObject:
                 predictors,
                 targets,
                 pred_targets,
+                predictions,
                 normalised_estimation_error,
                 target_singular_values,
                 connectivity_singular_values
@@ -69,6 +71,7 @@ class R2D3SolutionObject:
         self.predictors = predictors
         self.targets = targets
         self.pred_targets = pred_targets
+        self.predictions = predictions
         self.normalised_estimation_error = normalised_estimation_error
         self.target_singular_values = target_singular_values
         self.connectivity_singular_values = connectivity_singular_values
@@ -89,6 +92,7 @@ class R2D3SolutionObject:
                 inputs,
                 ridge,
                 rank,
+                None,
                 None,
                 None,
                 None,
@@ -122,16 +126,20 @@ class R2D3SolutionObject:
         rates, out = run_rnn(self.model, self.inputs)
         n_conds, T, n_neurons = rates.shape
         X_source = rates[:, :-1, :]
-        X_target = rates[:, 1:, :]
-        
+        X_target = rates[:, 1:, :] 
+        #actitvations 0-> rates
+        r_source = np.tanh(X_source)
+
         w_in = self.model.rnn.w_in
         alpha = self.model.rnn.alpha
         w_in_scale = self.model.rnn.w_in_scale.item()
 
         inputs_ = (self.inputs[:, :-1, :] @ w_in).detach().numpy()
+        
+    
         Y_target = (X_target - (1 - alpha) * X_source) / alpha - inputs_
 
-        R = X_source.reshape(-1, n_neurons)
+        R = r_source.reshape(-1, n_neurons)
         Y = Y_target.reshape(-1, n_neurons)
         self.targets = Y
 
@@ -153,6 +161,7 @@ class R2D3SolutionObject:
         self.J_reconstructed = J_rr
 
         prediction = R @ J_rr
+        self.predictions = prediction.reshape(n_conds, T - 1, n_neurons)
 
         #normalised Frobeniues error
         Y_norm = np.linalg.norm(Y, ord="fro")
@@ -191,7 +200,26 @@ class R2D3SolutionObject:
         self.w_reconstructed = w_out_new
 
 
+    def build_LowRankRNN(self) -> RNN:
 
+        """
+        constructs the low-rank RNN from fits 
+        """
+
+        params = self.model.params.copy()
+        params["low_rank"] = True
+        params["rank"] = self.rank
+        w_in = self.model.rnn.w_in  
+        w_out = self.w_reconstructed
+        model = RNN(params)
+
+        with torch.no_grad():
+            model.rnn.m.set_(torch.from_numpy(M))
+            model.rnn.n.set_(torch.from_numpy(N))
+            model.rnn.w_in.copy_(w_in)
+            model.rnn.w_out.set_(torch.from_numpy(params["recurrent_size"] * w_out.astype(np.float32)).T)
+
+        return model
 
 
 
