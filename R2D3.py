@@ -160,8 +160,8 @@ class R2D3SolutionObject:
         J_rr = J_full @ V_rr @ V_rr.T
         self.J_reconstructed = J_rr
 
+        
         prediction = R @ J_rr
-        self.predictions = prediction.reshape(n_conds, T - 1, n_neurons)
 
         #normalised Frobeniues error
         Y_norm = np.linalg.norm(Y, ord="fro")
@@ -173,6 +173,16 @@ class R2D3SolutionObject:
 
         self.normalised_estimation_error = normalised_estimation_error
 
+        # final hidden state prediction
+        prediction_r = prediction.reshape(n_conds, T - 1, n_neurons)
+        h_prediction = (
+                (1 - alpha) * X_source
+                + alpha * (
+                prediction_r + inputs_
+            )
+        )
+
+        self.predictions = h_prediction
 
         #recast as low-rank connectivity vecs
         U_new, connectivity_svs, Vt_new = \
