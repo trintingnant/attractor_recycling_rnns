@@ -56,7 +56,8 @@ class R2D3SolutionObject:
                 predictions,
                 normalised_estimation_error,
                 target_singular_values,
-                connectivity_singular_values
+                connectivity_singular_values,
+                factorisation_error
                 ):
 
         self.model = model
@@ -75,6 +76,7 @@ class R2D3SolutionObject:
         self.normalised_estimation_error = normalised_estimation_error
         self.target_singular_values = target_singular_values
         self.connectivity_singular_values = connectivity_singular_values
+        self.factorisation_error = factorisation_error
 
 
 
@@ -92,6 +94,7 @@ class R2D3SolutionObject:
                 inputs,
                 ridge,
                 rank,
+                None,
                 None,
                 None,
                 None,
@@ -381,7 +384,7 @@ def jr3_fit(self):
     self.J_reconstructed = K_rr.T
     self.normalised_estimation_error = normalised_jac_pred_error
     self.factorisation_error = factorisation_error
-    
+
 
 
   
