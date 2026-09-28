@@ -48,7 +48,6 @@ def _get_cmap(name):
 def _set_cycle_from_cmap(style, n_colors):
     cmap_name = STYLE_CMAPS.get(style, "bone") #default to bone map
     cmap = _get_cmap(cmap_name)
-    print(type(cmap))
     colors = [cmap(i / max(n_colors - 1, 1)) for i in range(n_colors)]
     mpl.rcParams["axes.prop_cycle"] = cycler(color=colors)
     mpl.rcParams["image.cmap"] = cmap_name
