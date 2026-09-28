@@ -307,6 +307,9 @@ def get_model_conn_vecs(model,
 					  dtype='float32')
 
 	m, n, w_in, w_out = get_lr_net_params(model)
+
+	# adjust for w_in scale
+	w_in = model.params["w_in_scale"] ** 2 * w_in
 	
 	#keep only the orthogonal part of I -> no drive along m
 	#Ref: Valente 2019, Dubreuil Valente et al. 2022, etc.
@@ -348,7 +351,7 @@ def get_overlap_matrix_all_params(conn_vecs, pops=None):
 	including inputs and outputs
 	ATTENTION: this will yield an upper triangular matrix for plotting interfacing
 	to obtain full covariances run the function below
-	TODO: should be integrated.
+	TODO: should be integrated. 
 	"""
 
 	num_params = conn_vecs.shape[0]
@@ -371,10 +374,6 @@ def get_overlap_matrix_all_params(conn_vecs, pops=None):
 				ov_mat[i,j, elem] = cov / counts[elem]
 
 	return ov_mat
-
-def build_covariance_from_tri(cov):
-    return cov + cov.T - np.eye(cov.shape[0])*np.diag(cov)
-
 
 def proj_spd(cov):
 	"""
@@ -410,32 +409,6 @@ def proj_spd(cov):
 		k += 1
 
 	return cov_new
-
-def get_eff_overlap_matrix(model, fp):
-	"""
-	obtains effective recurrent weight matrix under input modulation
-	"""
-
-	r = model.rnn.rank
-	m, n, w_in, _ = get_lr_net_params(model)
-
-	if fp._check:
-		x = fp.x_star.detach().numpy()
-	else:
-		print("Overlap matrix could not be computed. Likely cause: missing fixed point.")
-		return None
-
-	effN = np.array([n[i,:] * phiPrime(x) for i in range(r)])
-	ov_jac = effN[:,0,:] @ m / model.rnn.net_size
-	try:
-		res = (np.array([np.outer(m[:,i], effN[i,0,:])for i in range(r)])).sum() \
-						/ model.rnn.net_size - np.eye(r)
-
-	except:
-		print("Overlap matrix could not be computed. ")
-		return None
-
-	return res, ov_jac
 
 def extract_num_pops(pops):
 	return len(set(pops)) if pops is not None else 1
@@ -577,8 +550,10 @@ def make_MF_covs_attr_dyn(cov_params):
 
 	if np.linalg.eigh(cov)[0][0] < 0:
 		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
+
+	chol = np.linalg.cholesky(cov)
 	
-	return cov
+	return cov, chol
 
 def make_MF_covs_LC(cov_params):
 
@@ -592,21 +567,25 @@ def make_MF_covs_LC(cov_params):
 	sdM = cov_params["sdM"]
 	sdR = cov_params["sdR"]
 	sdOm = cov_params["sdOm"]
+	sdmW = cov_params ["sdmW"]
 
-	cov = np.array([[sdM, 0, sdR, sdOm, 0, 0],
-				 	[0, sdM, -sdOm, sdR, 0, 0],
-					[sdR, -sdOm, sdM, 0, 0, 0],
-					[sdOm, sdR, 0, sdM, 0, 0],
-					[0, 0, 0, 0, eps, 0],
-					[0, 0, 0, 0, 0, eps]
+	cov = np.array([[sdM, 0, 0, sdR, sdOm, 0, 0, 0, sdmW, 0],
+				 	[0, sdM, 0, -sdOm, sdR, 0,  0, 0, 0, sdmW],
+					[0, 0, sdM, 0, 0, 0, 0, 0, 0, 0],
+					[sdR, -sdOm, 0, sdM, 0, 0, 0, 0, 0, 0],
+					[sdOm, sdR, 0, 0, sdM, 0, 0, 0, 0, 0],
+					[0, 0, 1.1, 0, 0, sdM, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0, 0, eps, 0, 0, 0],
+					[0, 0, 0, 0, 0, 0, 0, eps, 0, 0],
+					[sdmW, 0, 0, 0, 0, 0, 0, 0, eps, 0],
+					[0, sdmW, 0, 0, 0, 0, 0, 0, 0, eps]
 					])
-	
-	if np.linalg.eigh(cov)[0][0] < 0:
-		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
-	
-	return cov
 
-def make_MF_covs_LC3D(cov_params):
+	cov = proj_spd(cov)
+	chol = np.linalg.cholesky(cov)
+	return cov, chol
+
+def make_MF_covs_LC2D(cov_params):
 
 	"""
 	Covariance matrix that produces an endogenously generated LC
@@ -618,82 +597,24 @@ def make_MF_covs_LC3D(cov_params):
 	sdM = cov_params["sdM"]
 	sdR = cov_params["sdR"]
 	sdOm = cov_params["sdOm"]
+	sdmW = cov_params["sdmW"]
 
-	cov = np.array([[sdM, 0, 0, sdR, sdOm, 0, 0, 0],
-				 	[0, sdM, 0, -sdOm, sdR, 0,  0, 0],
-					[0, 0, sdM, 0, 0, 0, 0, 0],
-					[sdR, -sdOm, 0, sdM, 0, 0, 0, 0],
-					[sdOm, sdR, 0, 0, sdM, 0, 0, 0, 0],
-					[0, 0, 0, 0, 0, 0, eps, 0],
-					[0, 0, 0, 0, 0, 0, 0, eps]
+	cov = np.array([[sdM, 0, sdR, sdOm, 0, 0, sdmW, 0],
+				 	[0, sdM, -sdOm, sdR, 0, 0, 0, sdmW],
+					[sdR, -sdOm, sdM, 0, 0, 0, 0, 0],
+					[sdOm, sdR, 0, sdM, 0, 0, 0, 0],
+					[0, 0, 0, 0, sdM, 0, 0, 0],
+					[0, 0, 0, 0, 0, sdM, 0, 0],
+					[sdmW, 0, 0, 0, 0, 0, eps, 0],
+					[0, sdmW, 0, 0, 0, 0, 0, eps]
 					])
 	
 	if np.linalg.eigh(cov)[0][0] < 0:
 		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
 	
-	return cov
+	chol = np.linalg.cholesky(cov)
 
-def make_MF_covs_RA(cov_params):
-	"""
-	Covariance matrix that produces endogenoluslt generated RA
-	"""
-	#simply do it by setting sdOM to 0 and calling make_MF_covs_LC
-	cov_params["sdOm"] = 0
-	return make_MF_covs_LC(cov_params)
-	
-	
-def make_MF_covs_attr_inhib (cov_params):
-
-	"""
-    Create covariance matrices for the model relying on attractor dynamix
-	mutual inhibition stabilises attractors 
-
-    Args:
-        cov_params: dictionary of covariance parameters
-    
-    Returns:
-        covs: covariance matrices
-
-    Here we have:
-		- A single population with two limit cycle attractors arranged in orthogonal planes
-		- Input does not modulate activity 
-		- Saturation of the dynamics through the non-linearity comes purely from size of the 
-		hidden acitivity (radius in each plane) and mutual inhibition
-        - Covariance matrix is 12-d
-        
-    """
-
-	eps = 1e-2
-
-	sdM = cov_params["sdM"] #variance of ms (and ns)
-	sdR = cov_params["sdR"] #covariance of the diagonal elements -> set radius
-	sdOm = cov_params["sdOm"] #covariance of the off-diagonal elements -> set frequency (i.e. clockwise vs. counter-clockwise)
-	sdI = cov_params["sdI"] #variance of the respective inputs, one per pop
-	sdmW = cov_params["sdmW"] #covariance of the recurrent- and output directions
-	sdnI = cov_params["sdI"] #covariance between the input-selection and input vectors
-	sdnW = cov_params["sdnW"] #covariance between the input selection vectors and the ouputs.
-	sdW = cov_params["sdW"] #variance of the output vectors (should be roughly OOM as sdM)
-	sd_inhib = cov_params["sdIhib"]
-	 
-
-	cov = np.array([[sdM, 0, 0, 0, sdR, -sdOm, sd_inhib, 0, 0, 0, eps, eps],
-				 	[0, sdM, 0, 0, sdOm, sdR, 0, sd_inhib, 0, 0, eps,eps],
-					[0, 0, sdM, 0, sd_inhib, 0, sdR, sdOm, 0, 0, eps, eps],
-					[0, 0, 0, sdM, 0, sd_inhib, -sdOm, sdR, 0, 0, eps,eps],
-					[sdR, sdOm, sd_inhib, 0, sdM, 0, 0, 0, sdnI, 0, 0, 0],
-					[-sdOm, sdR, 0, sd_inhib, 0, sdM, 0, 0, sdnI, 0, 0, 0],
-					[sd_inhib, 0, sdR, -sdOm, 0, 0, sdM, 0, 0, sdnI, 0, 0],
-					[0, sd_inhib, sdOm, sdR, 0, 0, 0, sdM, 0, sdnI, 0, 0],
-					[0, 0, 0, 0, sdnI, sdnI, 0, 0, sdI, 0, 0, 0],
-					[0, 0, 0, 0, 0, 0, sdnI, sdnI, 0, sdI, 0, 0],
-					[eps, eps, eps, eps, 0, 0, 0, 0, 0, 0, 0, 0],
-					[eps, eps, eps, eps, 0, 0, 0, 0, 0, 0, 0, 0]
-					])
-	"""
-	if np.linalg.eigh(cov)[0][0] < 0:
-		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
-	"""
-	return cov
+	return cov, chol
 
 def extract_idxs(model):
 
@@ -876,6 +797,24 @@ def compute_rate_similarity(rates, base_idx, trnst):
 		sims.append(sim)
 
 	return sims
+
+def unwrapped_angles(u, v):
+    """
+	Unwrap the arctan angles
+    """
+
+    theta = np.unwrap(
+        np.arctan2(v, u),
+        axis=-1
+    )
+
+    return theta
+
+# function simple function to prepare multi-model loading
+def subdirs(path, start): 
+    for entry in os.scandir(path):
+        if entry.is_dir() and entry.name.startswith(start): 
+            yield os.path.join(path, entry.name)
 
 
 

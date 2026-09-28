@@ -250,8 +250,7 @@ class LowRankRNNCell(nn.Module):
 
 				try:
 					loadings = initialize_lr_connectivity(self.params)
-					print("worked")
-
+	
 					m = self.m.copy_(
 						torch.from_numpy(
 						loadings[params["input_size"] + params["rank"]
@@ -290,6 +289,7 @@ class LowRankRNNCell(nn.Module):
 		return self
 
 	def forward(self, input_, hidden_state, noise=0):
+
 		#like above but wíth normalised m and n switched in for the recurrent connectivity
 		rec_input = torch.matmul(
 			torch.matmul(
@@ -369,7 +369,7 @@ class LowRankRNNCell(nn.Module):
 
 class HookedLowRankRNNCell(LowRankRNNCell):
 
-	"""implements LRRNNCell with gradient masking through hooks ="""
+	"""implements LRRNNCell with gradient masking through hooks"""
 
 	def __init__(self, params):
 		super().__init__(params)
@@ -496,86 +496,7 @@ class MeanFieldRNNCell(nn.Module):
 			self.covs.copy_(torch.from_numpy(covs))
 			self.chols.copy_(torch.from_numpy(chols))
 
-
-class MeanFieldRNNCell(nn.Module):
-
-	"""
-    Module for simulating and training Mean Fields
-	-> trains covariance matrix directly
-	"""
-
-	def __init__(self, params):
-		super(MeanFieldRNNCell, self).__init__()
-
-		self.params = params
-		self.nonlinearity = set_nonlinearity(params["nonlinearity"])
-		self.out_nonlinearity = set_nonlinearity(params["out_nonlinearity"])
-
-		self.dt = params["dt"]
-		self.tau = params["tau"]
-		self.alpha = params["dt"] / params["tau"]
-		#number of supports of the network covariance matrix
-		self.n_pops = params["n_pops"]
-		#loading space dimension for single population
-		self.num_loadings = 2 * params["rank"] + params["input_size"] + params["output_size"]
-		self.rank = params["rank"]
-		self.in_dim = params["input_size"]
-		self.out_dim = params["output_size"]
-		self.w_out = nn.Parameter(torch.Tensor(params["rank"], params["output_size"]))
-		self.weights = nn.Parameter(torch.Tensor(params["n_pops"]))
-		self.weights.requires_grad = False
-		self.cov_init_noise = params.get("cov_init_noise", 0)
-
-		#set covariance matrices...
-		lr_cov = params.get("lr_cov", None)
-		covs = np.zeros(
-			(self.num_loadings, 
-			self.num_loadings, 
-			params["n_pops"]
-			),
-			dtype=np.float32
-			)
-	
-		self.covs = nn.Parameter(torch.Tensor(*covs.shape))
-
-		#...and corresponding cholesky decompositions
-		chols = np.zeros_like(covs)
-		self.chols = nn.Parameter(torch.Tensor(*covs.shape))
-
-		#MEMO: seems a bit redundant...but could be useful down the road
-		with torch.no_grad():
-			
-			#set weights with balanced pops 
-			weights = np.ones(params["n_pops"]) / params["n_pops"]
-			self.weights.copy_(torch.from_numpy(weights)) 
-
-			#set w_out with balanced pops
-			w_out = np.ones((params["rank"], params["n_pops"])) / params["rank"]*params["n_pops"]
-			self.w_out.copy_(torch.from_numpy(w_out))
-
-			if lr_cov is not None:
-				
-				for i in range(covs.shape[2]):
-					_, chol = initialize_lr_connectivity(params, return_chol=True)
-					#Add some noise
-					chol += np.random.randn(*chol.shape)*self.cov_init_noise
-					chols[:,:,i] = chol
-					covs[:,:,i] = chol @ chol.T
-
-			else: 
-
-				for i in range(covs.shape[2]): 
-					_, chol = initialize_lr_connectivity(params, return_chol=True)
-				
-					#Add some noise -> populations different
-					chol += np.random.randn(*chol.shape)*self.cov_init_noise
-					chols[...,i] = chol
-					covs[...,i] = chol @ chol.T
-
-			self.covs.copy_(torch.from_numpy(covs))
-			self.chols.copy_(torch.from_numpy(chols))
-
-	def forward(self, input_, hidden_state, noise=0, return_gains=False):
+	def forward(self, input_, hidden_state, noise=0):
 
 		"""
 		Performs forward pass for the meanfield equations
@@ -654,6 +575,7 @@ class MeanFieldRNNCell(nn.Module):
 			
 		else:
 			w_out = (w_out * self.weights).sum(axis=2)
+
 		
 		return rates, w_out
 
@@ -664,7 +586,40 @@ class MeanFieldRNNCell(nn.Module):
 		"""
 		return 1/ torch.sqrt(1 + (torch.pi / 2) * x)
 	
-	
+	@staticmethod
+	def compute_gains_static(model, rates):
+
+		covs = model.rnn.covs.detach().numpy()
+		#start of ns
+		nidx = model.rnn.rank
+		#start of Is
+		Iidx = 2*model.rnn.rank
+		#start of ws
+		Widx = 2*model.rnn.rank+model.rnn.in_dim
+		
+		gains = []
+
+		for t in range(rates.shape[1]):
+
+			#hidden variables
+			K = rates[:,t, :nidx]
+			#input variables
+			V = rates[:,t, nidx:]
+
+			gains_ = model.rnn.compute_gains(
+					torch.sum(
+						torch.hstack(
+						(
+						torch.einsum('...iik, ...li -> ...lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
+						torch.einsum('...iik, ...li -> ...lik', covs[:nidx, :nidx, :], K**2)
+						)
+						), axis=1
+					)
+				)
+			
+			gains.append(gains_)
+
+		return gains
 
 	@staticmethod
 	def sample(self, N):
@@ -729,7 +684,7 @@ class MeanFieldRNNCell(nn.Module):
 		Initialises MeanFieldRNN from covariance matrix
 		"""
 
-		params = dict(params)
+		params = params.copy()
 		params["low_rank"] = True 
 		params["mean_field"] = True
 		#will initialise hooked version if necessary:
@@ -825,7 +780,7 @@ class HookedMeanFieldRNNCell(MeanFieldRNNCell):
 	def _mask_cov_grad(self, grad):
 		return grad * self.mask
 	
-	def forward(self, input_, hidden_state, noise=0, return_gains=False):
+	def forward(self, input_, hidden_state, noise=0):
 
 		"""
 		Performs forward pass for the meanfield equations
@@ -921,43 +876,6 @@ class HookedMeanFieldRNNCell(MeanFieldRNNCell):
 		"""
 		pass
 
-	
-class GaussianLibRNN(MeanFieldRNNCell):
-
-	"""
-	Module defined via a library of covariance matrices
-	The only trained components are the vector
-	of input variances. This could be implemented via hooked
-	cells, but that significantly slows training, as only the unmasked
-	bits of the gradient get propagated
-	"""
-
-	def __init__(self, params):
-		super().__init__(params)
-
-		self.covs.requires_grad = False
-		self.input_vars = torch.eye(*self.covs.shape)
-
-
-
-
-class GaussianLRRNN(nn.Module):
-
-	"""Low rank rnn with prefixed population structure. Basic defs like in @Valente,
-	where all populations are transformations of a shared Gaussian basis
-
-	For now this is only implemented as a parent class for the hooked version, 
-	which allows to train populations separately
-
-	TODO: implement. For now the MF variant serves though and
-	a GaussianLRRNN can always be sampled from the basis defined there
-	"""
-
-	def __init__(self, params):
-		super(GaussianLRRNN, self).__init__()
-
-		pass
-
 #=========CONVENIENCE FUNCTIONS FOR MODEL HANDLING===================
 
 def load_rnn(inPath: str):
@@ -1022,7 +940,7 @@ def save_rnn(outPath: str,
 			file = os.path.join(outPath, f"{key}.npz")
 			np.savez(file, value)
 
-def run_rnn(model, input_, init_state=None):
+def run_rnn(model, input_, init_state=None, return_gains=False):
 
 	"""Convenience function for running an RNN of any type
 	return detached outputs

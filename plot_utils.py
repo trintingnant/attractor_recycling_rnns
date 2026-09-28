@@ -18,6 +18,8 @@ from FixPointSearch.FixedPoint import FixedPoint
 sys.path.append('../styles')
 import plotstyle
 
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
 NUM_ANGLES = 25
 
 #=======GENERAL UTILITY FUNCTIONS FOR AX AND COLOR MANIPULATION========
@@ -43,6 +45,127 @@ def set_colors(num_colors):
 
     return colors
 
+
+def add_arrowhead_3d(
+    ax,
+    x,
+    y,
+    z,
+    t,
+    dt=3,
+    color="black",
+    head_length=0.18,
+    head_width=0.16,
+):
+    
+    """
+    Arrow plotting, mainly for cylindrical figure plots.
+    But could also be used in other plots (though in the current
+    form they need to be 3d)
+    
+    """
+
+    p0 = np.array([x[t], y[t], z[t]])
+    p1 = np.array([x[t+dt], y[t+dt], z[t+dt]])
+
+    d = p1 - p0
+    d = d / np.linalg.norm(d)
+
+    n = np.array([x[t+dt], y[t+dt], 0.0])
+    n = n / np.linalg.norm(n)
+
+    s = np.cross(n, d)
+    s = s / np.linalg.norm(s)
+
+    tip = p1
+
+    left  = tip - head_length*d + head_width*s
+    right = tip - head_length*d - head_width*s
+
+    verts = [[left, tip, right]]
+
+    poly = Poly3DCollection(
+        verts,
+        facecolor=color,
+        edgecolor=color,
+        linewidth=0.5,
+        alpha=1.0
+    )
+
+    ax.add_collection3d(poly)
+
+
+def set_pi_yticks(ax, sparsity=2):
+
+    """
+    Set the y ticks with pi
+    """
+
+    ymin, ymax = ax.get_ylim()
+
+    nmin = int(np.floor(ymin / np.pi))
+    nmax = int(np.ceil(ymax / np.pi))
+
+    ticks = np.arange(nmin, nmax + 1) * np.pi
+
+    labels = []
+
+    for n in range(nmin, nmax + 1):
+        if n == 0:
+            labels.append(r"$0$")
+        elif n == 1:
+            labels.append(r"$\pi$")
+        elif n == -1:
+            labels.append(r"$-\pi$")
+        else:
+            labels.append(rf"${n}\pi$")
+
+    ticks = ticks[::sparsity]
+    labels = labels[::sparsity]
+
+    ax.set_yticks(ticks)
+    ax.set_yticklabels(labels)
+
+    return ax
+
+def set_pi_xticks(ax):
+
+    """
+    Set the x ticks with pi
+    """
+
+    ymin, ymax = ax.get_xlim()
+
+    nmin = int(np.floor(ymin / np.pi))
+    nmax = int(np.ceil(ymax / np.pi))
+
+    ticks = np.arange(nmin, nmax + 1) * np.pi
+
+    labels = []
+    for n in range(nmin, nmax + 1):
+        if n == 0:
+            labels.append(r"$0$")
+        elif n == 1:
+            labels.append(r"$\pi$")
+        elif n == -1:
+            labels.append(r"$-\pi$")
+        else:
+            labels.append(rf"${n}\pi$")
+
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels)
+
+    return ax
+
+def get_colors(num_colors):
+
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    base_colors = prop_cycle.by_key()['color']
+    idx = np.linspace(0, len(base_colors)-1, num_colors, dtype=int)
+    colors = [base_colors[i] for i in idx]
+    
+    return colors
+    
 
 #=======REGULAR PLOT UTILS=====================
 
@@ -122,7 +245,7 @@ def plot_input_interpolation(num_angles):
     
     fig, ax = plt.subplots(
     subplot_kw={"projection": "polar"},
-    figsize=(7, 7),
+    figsize=(4, 4),
     )
 
     ax.set_thetamin(0)
@@ -869,9 +992,9 @@ def lower_triangular_heatmap(covs,
             ptile = kwargs.get('ptile', 0)
 
             for (i,j) in zip(*np.triu_indices_from(covs[:,:,popIdx])):
-                #print only most significant values:
-                if j > i and np.abs(tri_mat_flattened[i,j]) >= np.percentile(np.abs(covs[:,:, popIdx]), ptile):
+                  if j > i and np.abs(tri_mat_flattened[i,j]) >= np.percentile(np.abs(covs[:,:, popIdx]), ptile):
                     if np.abs(covs[i,j, popIdx]) > 1e-1:
+             
                         r, g, b, _ = cmap1(norm(covs[i,j,popIdx]))
                         # Compute perceived luminance (human vision weighted)
                         luminance = 0.2126*r + 0.7152*g + 0.0722*b
@@ -1111,7 +1234,7 @@ def connectivity_scatter_grid(
                 va="center",
             )
 
-    plt.show()
+    return fig 
 
 def connectivity_scatter_from_idxs(model, idxs1, idxs2, pops): 
 
