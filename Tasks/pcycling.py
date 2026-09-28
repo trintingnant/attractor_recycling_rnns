@@ -61,7 +61,9 @@ class PCycling(Task):
 
 		for idx, phi in enumerate(angles):
 			const_input_tensor = torch.zeros_like(trial)
-			const_input_tensor[:,d] = torch.tensor([torch.cos(phi), torch.sin(phi)])
+			const_input_tensor[d,:] = torch.from_numpy(
+											np.array([np.cos(phi), np.sin(phi)])
+											)
 			inputs[idx,:,:] = const_input_tensor
 
 		return inputs
