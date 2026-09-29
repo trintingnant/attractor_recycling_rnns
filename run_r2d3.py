@@ -5,6 +5,8 @@ from R2D3 import *
 from argparse import ArgumentParser
 from setup import *
 import importlib 
+from tqdm.auto import tqdm
+
 
 parser = ArgumentParser()
 parser.add_argument("--r", 
@@ -46,7 +48,6 @@ importlib.import_module(args.module)
 
 base_model_paths = list(subdirs(args.p, start=args.s))
 base_models = [load_rnn(path)[0] for path in base_model_paths]
-print([base_model_paths])
 
 if args.a == "":
     sortedModels = base_models
@@ -56,12 +57,11 @@ else:
     sortedModels = [base_models[i] for i in sortedIdxs]
 
 # set up task
-
 _, model_params, task_params, training_params = load_rnn(base_model_paths[0])
 cycles = Task.load_task("Cycling", task_params)
 inputs = cycles.generate_inputs(NUM_ANGLES)
 
-# set up some tensors
+# set up some tensorsxs
 trial_len = task_params["trial_len"]
 out_dim = task_params["out_dim"]
 trials = torch.vstack([cycles[i][0] for i in range(len(cycles))]).reshape(-1, trial_len, out_dim)
@@ -69,37 +69,16 @@ targets = torch.vstack([cycles[i][1] for i in range(len(cycles))]).reshape(-1, t
 masks = torch.vstack([cycles[i][2] for i in range(len(cycles))]).reshape(-1, trial_len, out_dim)
 
 
-def run4model(model):
-
-
-    rates, out = run_rnn(model, inputs)
-    errors = []
-    solutions = []
-
-    for rank in range(1, args.r):
-        Solution = R2D3SolutionObject._setup(model, inputs, rank=rank, ridge=1e-1, mechanistic_rank=None)
-        Solution.r2d3_tube_fit(n_perturbations=4)
-        solutions.append(Solution)
-        errors.append(Solution.normalised_estimation_error)
-
-    # we still wa
-    for idx in range(len(solutions)):
-        sol = solutions[idx]
-        lr_model = sol.build_LowRankRNN()
-        _, out = run_rnn(lr_model, trials)
-        err = mse(out, targets, masks)
-        if err <= args.t:
-            break
-
-    #build the LR model
-    lr_model = sol.build_LowRankRNN()
-
-    return sol, errors, lr_model
-
 if __name__ == "__main__":
 
-    for idx in range(len(sortedModels)):
-        sol, errors, lr_model = run4model(sortedModels[idx])
+    for idx in tqdm(range(len(sortedModels)), unit="model"):
+
+        sol, errors, lr_model = R2D3SolutionObject.run4model(sortedModels[idx], 
+                                                             inputs,
+                                                             targets,
+                                                             masks,
+                                                             tol=args.t
+                                                             )
         model_path = base_model_paths[idx]
         outPath = os.path.join(model_path, "r2d3_fit")
 
@@ -125,5 +104,5 @@ if __name__ == "__main__":
                     ),
                     sol
                     )
-
-    
+        
+        

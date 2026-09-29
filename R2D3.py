@@ -12,6 +12,8 @@ import torch, numpy as np
 from rnn import RNN, run_rnn
 from typing import Callable, NewType, Tuple, Optional
 from numpy.typing import NDArray
+from tqdm.auto import tqdm
+from utils import mse
 
 Array = NewType("Array", NDArray[np.floating])
 
@@ -350,161 +352,33 @@ class R2D3SolutionObject:
                                     )
 
             return model
+    
+    @staticmethod
+    def run4model(model, inputs, tol=.05):
 
-    def jr3_fit(self, subspace_dim):
+        rates, out = run_rnn(model, inputs)
+        errors = []
+        solutions = []
 
-        from utils import phiPrime
+        for rank in tqdm(range(1, args.r), unit="rank"):
+            Solution = R2D3SolutionObject._setup(model, inputs, rank=rank, ridge=1e-1, mechanistic_rank=None)
+            Solution.r2d3_tube_fit(n_perturbations=4)
+            solutions.append(Solution)
+            errors.append(Solution.normalised_estimation_error)
 
-        """
-        This performs reduced rank regression ON THE JACOBIANS
-        Procedure as above, but the regression targets are the 
-        jacobians along the trajectory.
+        # we still wa
+        for idx in range(len(solutions)):
+            sol = solutions[idx]
+            lr_model = sol.build_LowRankRNN()
+            _, out = run_rnn(lr_model, trials)
+            err = mse(out, targets, masks)
+            if err <= tol:
+                break
 
-        This can be considered a dual of the EMPJ method (Pollock & Jazayeri, 2020)
+        # build the LR model
+        lr_model = sol.build_LowRankRNN()
 
-        Why is this an improvement? The standard reduced regression
-        uses the trajectories as pointwise regression targets -> small errors 
-        can blow up quickly during the forward pass of the reconstructed networks. 
-        """
-        
-        if self.inputs.ndim <= 2:
-                self.inputs = self.inputs.unsqueeze(0)
-
-        rates, out = run_rnn(self.model, self.inputs)
-        n_conds, T, n_neurons = rates.shape
-
-        W_full = (
-            self.model.rnn.w_rec
-            .detach()
-            .numpy() 
-        ) 
-
-        # regression target 
-        K_true = W_full.T 
-
-        # compute the gains along the trajectory 
-        rates_flat = rates.reshape(-1, n_neurons)
-        gains = phiPrime(rates_flat)
-        n_samples = gains.shape[0] 
-        # how many points we're using. This is analogous to the setpoints in EMPJ
-        # We could sample the activations more coarsely
-        
-        # obtain the Jacobians: J(t) = -I * PhiPrime(h(t)) W_rec.T/K_true
-        # ATTENTION: DO NOT STORE THE JACOBIANS
-
-        I = np.eye(n_neurons, dtype=K_true.dtype)
-        Gram_data = np.zeros((n_neurons, n_neurons), dtype=K_true.dtype)
-        R = np.zeros_like(Gram_data)
-        
-        # we can't do this on the full Jacobians. Like in EMPJ we want to fit only 
-        # the leading directions of the Jacobian
-
-        rates_centered = (
-            rates_flat
-            - rates_flat.mean(
-                axis=0,
-                keepdims=True,
-            )
-        )
-
-        _, trajectory_svs, trajectory_Vt = np.linalg.svd(
-            rates_centered,
-            full_matrices=False,
-        )
-
-        Q = trajectory_Vt[:subspace_dim].T
-
-
-        for t, gain in enumerate(gains):
-
-            R_t = Q.T * gain[None, :]
-        
-
-            Y_t = R_t @ K_true
-
-            # we use the "accumulation trick" instead of stacking here to conserve memory
-            Gram_data += R_t.T @ R_t
-     
-            R += R_t.T @ Y_t
-        
-
-
-        #We solve Y_t = D @ W.T 
-        Gram = Gram_data + self.ridge * I
-        K_full = np.linalg.solve(Gram, R)
-        
-
-        prediction_covariance = K_full.T @ Gram_data @ K_full
-
-        eigvals, eigvecs = np.linalg.eigh(prediction_covariance)
-        sorted = np.argsort(eigvals)[::-1]
-        eigvals = eigvals[sorted]
-        eigvecs = eigvecs[:, sorted]
-
-        # shouldn't happen, but for sanity set all negative eigvals to 0.0
-        eigvals = np.maximum(eigvals, 0.0)
-        # singular value of the target matrix are the roots of the eigenvectors of the covariance
-        target_svs = np.sqrt(eigvals)
-
-        V_rr = eigvecs[:, :self.rank]
-        self.V_rr = V_rr
-
-        # this is the reduced rank regression step. Just as before. 
-        K_rr = K_full @ V_rr @ V_rr.T
-
-        #errors 
-        K_error = K_true - K_rr
-
-        # We want || Y_t - Y_est ||
-        # Since Y_t = D @ K_true, Y_est = D @ K_rr
-        # if we comp || D(t)K_true - D(t)K_rr ||^2_F, sum over the t and take the sqrt, that should work. 
-        # also: || D(t)K_true - D(t)K_rr ||^2_F = tr(K_error.T Sum D.T D K_error)
-        # middle term is just Gram_data: NEAT!
-
-        rec_error_norm = np.trace(K_error.T @ Gram_data @ K_error)
-        target_norm = np.trace(K_true.T @ Gram_data @ K_true)
-
-        normalised_jac_pred_error = np.sqrt(rec_error_norm) / np.sqrt(target_norm)
-
-        # as before: extract low-rank network loadings, This is just verbatim the same code block.
-
-        U_new, connectivity_svs, Vt_new = \
-                np.linalg.svd(K_rr.T, full_matrices=False)
-            
-        loadings_scale = (np.sqrt(connectivity_svs[:self.rank])
-                        * np.sqrt(n_neurons)
-                        )
-        self.connectivity_singular_values = connectivity_svs
-        
-        M_rr = loadings_scale[None, :] * U_new[:, :self.rank]
-        N_rr = loadings_scale[:, None] * Vt_new[:self.rank, :]
-        self.M_rr = M_rr
-        self.N_rr = N_rr
-        
-        W_from_loadings =  (
-            M_rr @ N_rr
-        ) / n_neurons
-
-        factorisation_error = (
-            np.linalg.norm(
-                K_rr.T - W_from_loadings,
-                ord="fro"
-            )
-            /
-            np.linalg.norm(
-                K_rr.T,
-                ord="fro"
-            )
-        )
-
-        # unfortunate attribute naming now:
-        self.J_reconstructed = K_rr.T
-        self.normalised_estimation_error = normalised_jac_pred_error
-        self.factorisation_error = factorisation_error
-        self.w_reconstructed = (self.model.rnn.w_out
-                                .detach()
-                                .numpy() 
-                                ).T 
+        return sol, errors, lr_model
 
 
 
