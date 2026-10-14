@@ -305,8 +305,7 @@ def vector_energy_spectrum(X, Q, max_rank):
     at different ranks
     """
 
-    eps = 1e-12
-    norm = np.linalg.norm(X) ** 2 + eps
+    norm = np.linalg.norm(X) ** 2 + EPS
 
     cumulative = np.zeros(max_rank)
 

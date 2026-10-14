@@ -154,10 +154,7 @@ def compute_stagewise_gradient_energy(analyzer: DynamicsAnalyzer):
         G_rec = analyzer["full_task_gradients_and_losses"]["G_rec"]
 
     except Exception as e:
-        print(
-            e.message,
-            e.args
-        )
+        print(e)
 
     centres = np.asarray(
         [
@@ -232,10 +229,8 @@ def compute_stagewise_IO_changes(analyzer: DynamicsAnalyzer,
         dW_out = deepcopy(analyzer.dW_out)
 
     except Exception as e:
-        print(
-            e.message,
-            e.args
-        )
+        print(e)
+
 
     centres = np.asarray(
         [
