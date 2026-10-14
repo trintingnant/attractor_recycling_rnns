@@ -77,6 +77,8 @@ if __name__ == "__main__":
                                                              inputs,
                                                              targets,
                                                              masks,
+                                                             trials,
+                                                             max_rank=args.r,
                                                              tol=args.t
                                                              )
         model_path = base_model_paths[idx]
@@ -104,5 +106,6 @@ if __name__ == "__main__":
                     ),
                     sol
                     )
+
         
         

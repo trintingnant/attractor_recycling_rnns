@@ -40,12 +40,16 @@ import plotstyle
 import matplotlib, matplotlib.pyplot as plt
 
 from IPython import get_ipython
-if get_ipython is not None:
+if get_ipython() is not None:
+    # run autoreload via setup file
+    get_ipython().run_line_magic("load_ext", "autoreload")
+    get_ipython().run_line_magic("autoreload", "2")
     get_ipython().run_line_magic("matplotlib", "inline")
 
 from train import train_rnn
 import importlib 
 from Tasks.TaskManager import Task
+
 """
 NOTE: individual tasks will have to be imported manually
 """
@@ -53,7 +57,11 @@ NOTE: individual tasks will have to be imported manually
 from FixPointSearch.FixedPoint import FixedPoint
 from FixPointSearch.fpFinder import *
 
+# standard global variable for input interpolation
+# so we don't always have to define it
 global NUM_ANGLES
 NUM_ANGLES = 25
-plotstyle.use("general", NUM_ANGLES)
+
+# standard plotting specs unless otherwise indicated by context
+plotstyle.use("inputs", 10)
 

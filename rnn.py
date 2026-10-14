@@ -250,7 +250,6 @@ class LowRankRNNCell(nn.Module):
 
 				try:
 					loadings = initialize_lr_connectivity(self.params)
-	
 					m = self.m.copy_(
 						torch.from_numpy(
 						loadings[params["input_size"] + params["rank"]
@@ -589,7 +588,11 @@ class MeanFieldRNNCell(nn.Module):
 	@staticmethod
 	def compute_gains_static(model, rates):
 
-		covs = model.rnn.covs.detach().numpy()
+		"""
+		method for computing gains in eval mode
+		"""
+
+		covs = model.rnn.covs
 		#start of ns
 		nidx = model.rnn.rank
 		#start of Is
@@ -620,8 +623,7 @@ class MeanFieldRNNCell(nn.Module):
 			gains.append(gains_)
 
 		return gains
-
-	@staticmethod
+	
 	def sample(self, N):
 		pass #just done in resample
 	

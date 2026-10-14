@@ -309,7 +309,7 @@ def get_model_conn_vecs(model,
 	m, n, w_in, w_out = get_lr_net_params(model)
 
 	# adjust for w_in scale
-	w_in = model.params["w_in_scale"] ** 2 * w_in
+	w_in = model.params["w_in_scale"] * w_in
 	
 	#keep only the orthogonal part of I -> no drive along m
 	#Ref: Valente 2019, Dubreuil Valente et al. 2022, etc.
@@ -766,6 +766,15 @@ def compute_jacobian_mf_analytical(model, k, in_):
 
 #===============MISCELLANEOUS===================
 
+def to_numpy(x):
+            if torch.is_tensor(x):
+                  return (x
+                          .detach()
+                          .numpy()
+                          )
+            
+            return np.asarray(x)
+
 def build_state_dicts_from_params(params, idx):
     from collections import OrderedDict
     state_dict = OrderedDict(
@@ -798,6 +807,56 @@ def compute_rate_similarity(rates, base_idx, trnst):
 
 	return sims
 
+def compute_similarities_by_rank(rates, 
+								 base_idx, 
+								 trnst,
+								 max_rank
+	): 
+	"""
+	Computes the similarities as before, but truncates
+	the SVD at successive ranks. This is to illicit 
+	at what point the dissimilarity arises. 
+
+	NOTE: We observe that for the attractor solution with slaving
+	the trajectories explore exactly the same low-dimensional
+	subspace (though differently), with differences residing
+	only at higher ranks.
+
+	In effect, this means that our Procrustes-like measure
+	is not really a super-solid diagnostic criterion,
+	because attractor structure can also manifest itself
+	in the WAY a the same subspace is explored, rather
+	than the subspace itself. 
+	
+	"""
+
+	similarities_by_rank = {}
+	for rank in range(1, max_rank):
+
+		rates_rank = []
+		for idx in range(rates.shape[0]):
+			X = rates[idx]
+
+			U, S, Vh = np.linalg.svd(
+				X,
+				full_matrices=False
+			)
+			X_rank = (
+				U[:, :rank]
+				@ np.diag(S[:rank])
+				@ Vh[:rank]
+			)
+			rates_rank.append(X_rank)
+
+		rates_rank = np.asarray(rates_rank)
+
+		similarities_by_rank[rank] = compute_rate_similarity(
+			rates_rank,
+			base_idx,
+			trnst
+		)
+	return similarities_by_rank
+
 def unwrapped_angles(u, v):
     """
 	Unwrap the arctan angles
@@ -811,11 +870,52 @@ def unwrapped_angles(u, v):
     return theta
 
 # function simple function to prepare multi-model loading
-def subdirs(path, start): 
-    for entry in os.scandir(path):
-        if entry.is_dir() and entry.name.startswith(start): 
-            yield os.path.join(path, entry.name)
+def subdirs(path, start):
+    for root, dirs, _ in os.walk(path):
+        for dirname in dirs:
+            if dirname.startswith(start):
+                yield os.path.join(root, dirname)
 
+
+def oscillatory_mode_spectrum(rates, omega, trnst=0):
+    """
+    Computes the strength of dynamics at a particular frequency via the SVD
+
+    omega: angular frequency in radians / timestep
+    """
+
+    modes = []
+
+    for c in range(2):
+
+        X = rates[c, trnst:, :]
+        X = X - X.mean(axis=0, keepdims=True)
+        t = np.arange(X.shape[0])
+
+        z = np.sum(
+            X * np.exp(-1j * omega * t)[:, None],
+            axis=0
+        )
+
+        modes.extend([
+            np.real(z),
+            np.imag(z)
+        ])
+
+    H = np.stack(modes, axis=1)
+
+    _, S, _ = np.linalg.svd(
+        H,
+        full_matrices=False
+    )
+
+    energy = S**2
+    energy /= energy.sum() + 1e-12
+
+    return {
+        "singular_values": S,
+        "variance_fractions": energy,
+    }
 
 
 
