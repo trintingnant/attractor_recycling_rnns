@@ -354,13 +354,21 @@ class R2D3SolutionObject:
             return model
     
     @staticmethod
-    def run4model(model, inputs, tol=.05):
+    def run4model(model, 
+                  inputs,
+                  targets,
+                  masks,
+                  trials,
+                  *,
+                  max_rank=10,
+                  tol=.05
+    ):
 
         rates, out = run_rnn(model, inputs)
         errors = []
         solutions = []
 
-        for rank in tqdm(range(1, args.r), unit="rank"):
+        for rank in tqdm(range(1, max_rank), unit="rank"):
             Solution = R2D3SolutionObject._setup(model, inputs, rank=rank, ridge=1e-1, mechanistic_rank=None)
             Solution.r2d3_tube_fit(n_perturbations=4)
             solutions.append(Solution)

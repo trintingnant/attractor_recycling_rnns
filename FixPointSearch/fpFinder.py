@@ -3,7 +3,7 @@ import torch, numpy as np
 from rnn import RNN as RNN
 from torch.autograd import Variable, functional
 import os, pickle as pkl
-from FixedPoint import FixedPoint, TensorArray
+from FixPointSearch.FixedPoint import FixedPoint, TensorArray
 
 
 class FixedPointFinder(object):

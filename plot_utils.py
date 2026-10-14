@@ -169,9 +169,18 @@ def get_colors(num_colors):
 
 #=======REGULAR PLOT UTILS=====================
 
-def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
+def plot_spectrum(model, 
+                  w_rec=True, 
+                  mat: Optional[np.ndarray]=None, 
+                  ax=None, 
+                  **kwargs
+    ):
 
     """Plots the eigenvalue spectrum of a (RNN-weight)-matrix"""
+
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
 
     from matplotlib.patches import Circle, Arc
     
@@ -183,7 +192,6 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
     
     eigvecs, eigvals = np.linalg.eig(w_rec)[::-1]
     real, imag = np.real(eigvals), np.imag(eigvals)
-    fig, ax = plt.subplots()
     plt.tick_params(
         axis='both',       # changes apply to the x-axis
         which='both',      # both major and minor ticks are affected
@@ -192,38 +200,32 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
         labelbottom=False,
         labelleft=False,
         left=False)
-    ax.set_ylabel(r"$Im(\lambda$)")
-    ax.set_xlabel(r"$Re(\lambda$)")
+    ax.set_ylabel(r"$Im(\lambda$)",
+                  loc="top", 
+                  rotation=0, 
+                  fontsize=9
+                  )
+    ax.set_xlabel(r"$Re(\lambda$)", 
+                  loc="right", 
+                  fontsize=9
+                  )
+    ax.legend('off')
     ax.set_aspect("equal", adjustable="box")
     r = 2*model.params["spectral_radius"]
-    
-    """
-    arc = Arc((0,0), r, r, 
-              color='silver', 
-              theta1=330, 
-              theta2=30, 
-              linewidth=5,
-              linestyle='--',
-              label=r"$g$")
-    arc2 = Arc((0,0), 2, 2, 
-              color='black', 
-              theta1=330, 
-              theta2=30, 
-              linewidth=5,
-              linestyle='--',
-              label="stability line")
-    
-    
-    ax.add_patch(arc)
-    ax.add_patch(arc2)
-    """
 
     c = [1 if r > 1 else 0 for r in real]
     circle = Circle((0,0), model.params["spectral_radius"], fill=True, alpha=0.2, color="black", 
                     label=r"$g={0}$".format(model.params["spectral_radius"]), zorder=-1)
     ax.add_artist(circle)
     ax.scatter(real, imag, c=c, alpha=.8, zorder=10)
-    #plot stability li
+    ax.axvline(1.0,
+               color="black",
+               alpha=.6,
+               linewidth=.8,
+               linestyle="-."
+               )
+
+    #plot stability line 
     ymin, ymax = 1.2*np.min(imag), 1.2*np.max(imag)
     xmin, xmax = 1.2*np.min(real), 1.2*np.max(real)
     ax.spines['top'].set_visible(False)
@@ -231,15 +233,8 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
     ax.set_aspect("equal", adjustable="box")
-    ax.axvline(x=1, ymin=ymin, ymax=ymax,  c="black", linestyle='--', label="stability line", alpha=.5)
-    ax.axvline(x=0, ymin=ymin, ymax=ymax, c="grey", alpha=.2)
-    ax.axhline(y=0, c="grey", alpha=.2)
-    ax.scatter(0,0, facecolors=None, c='grey', alpha=.2, zorder=-1)
-    ax.plot()
-    ax.legend()
+    center(ax)
 
-    plt.show()
-    return fig, ax
 
 def plot_input_interpolation(num_angles):
     
@@ -402,6 +397,33 @@ def plot_multitask_net_response(model, trial, antitrial):
     #axs[0].set_title('Task')
     plt.tight_layout(w_pad=1.5, h_pad=1.5)
     plt.show() 
+
+    return axs
+
+def plot_dynamix_low_rank(model, inputs):
+    
+    rates, _ = run_rnn(model, inputs)
+    m = model.rnn.m.detach().numpy()
+    ks = proj_(m.T, rates)
+    num_inputs = inputs.shape[0]
+
+    fig, axs = plt.subplots(model.rnn.rank, 1)
+    for i in range(num_inputs):
+        for j in range(model.rnn.rank):
+            axs[j].plot(ks[i,j,:])
+
+    return axs
+
+def plot_dynamix_mean_field(model, inputs):
+
+    rates, _ = run_rnn(model, inputs)
+    ks = rates[...,:model.rnn.rank]
+    num_inputs = inputs.shape[0]
+
+    fig, axs = plt.subplots(model.rnn.rank, 1)
+    for i in range(num_inputs):
+        for j in range(model.rnn.rank):
+            axs[j].plot(ks[i,:,j])
 
     return axs
 
