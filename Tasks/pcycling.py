@@ -53,16 +53,17 @@ class PCycling(Task):
 	def generate_inputs(self, num_inputs):
 
 		trial, _, _ = self.get_stim(idx=0)
-		antitrial, _, _ = self.get_stim(idx=self.__len__())
-		d = self.task_params["rand_delay"]
+		d = self.task_params.get("rand_delay", 0) 
 
 		#draw interpolated inputs from upper right quadrant
 		angles = np.linspace(0, np.pi/2, num_inputs)
 		inputs = torch.zeros((num_inputs, *trial.shape))
 
 		for idx, phi in enumerate(angles):
-			const_input_tensor = const_input_tensor = np.zeros_like(trial)*np.array([np.cos(phi), np.sin(phi)])
-			const_input_tensor[d,:] = torch.tensor(const_input_tensor).float()
+			const_input_tensor = torch.zeros_like(trial)
+			const_input_tensor[d,:] = torch.from_numpy(
+											np.array([np.cos(phi), np.sin(phi)])
+											)
 			inputs[idx,:,:] = const_input_tensor
 
 		return inputs

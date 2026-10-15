@@ -69,8 +69,49 @@ class Task(Dataset, ABC):
         raise NotImplementedError
 
 
+def make_task_from_tensors(trials, targets, masks, name="") -> Task:
 
-"""--------------------------------------------------"""
+    """
+    Converts a set of trials, targets and masks to a local Task object.
+
+    @Args:
+
+    trials, targets, masks: torch.Tensors
+
+    NOTE: tensors should be detached when passed, otherwise the backward pass double-dips
+    the computational graph
+
+    @Returns:
+
+    TensorTask: a local Task subclass
+    """
+    if len(trials.shape) <= 2:
+        trials = trials.unsqueeze(dim=0)
+    if len(targets.shape) <= 2:
+        targets = targets.unsqueeze(dim=0)
+    if len(masks.shape) <= 2:
+        masks = masks.unsqueeze(dim=0)
+
+    batch_size, _, _ = trials.shape
+    task_params = {"num_trials": batch_size} #basically a  dummy variable
+
+    class TensorTask(Task):
+
+       def __name__():
+           return name
+
+       def get_stim(self, idx):
+           #labels, delays set by trial tensors
+           return trials[idx], 0, 0
+
+       def get_target(self, idx):
+           mask = torch.ones_like(targets[idx], dtype=bool)
+           return targets[idx], mask
+       
+       def generate_inputs(self, num_inputs):
+           pass
+       
+    return TensorTask(task_params)
 
 
 

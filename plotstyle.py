@@ -4,47 +4,70 @@ import matplotlib as mpl
 from cycler import cycler
 from contextlib import contextmanager
 from pathlib import Path
+from matplotlib.colors import LinearSegmentedColormap
 
-global STYLE_CMAPS 
+#Create custom color maps for plotting contexts:
+
+CUSTOM_CMAPS = {
+    "hotpink_grey": [
+        (0.0, "hotpink"),   
+        (0.5, "white"),     
+        (1.0, "darkgrey"), 
+    ],
+    
+    "mint_darkgreen": [
+        (0.0, "#98ffcc"),
+        (0.5, "white"), 
+        (1.0, "#004d1a"),    
+    ]
+   
+}
+
 STYLE_CMAPS = {
     "inputs": "coolwarm",
     "dark": "managua",
-    "general": "coolwarm",
+    "general": "hotpink_grey",
     "divergent": "berlin"
 }
 
+STYLE_DIR = Path(__file__).parent / "styles"
+
+for name, stops in CUSTOM_CMAPS.items():
+    cmap = LinearSegmentedColormap.from_list(
+        name,
+        stops,
+        N=256
+    )
+
+    mpl.colormaps.register(cmap, force=True)
+
+def _get_cmap(name):
+    return mpl.colormaps.get_cmap(name)
+
+
 def _set_cycle_from_cmap(style, n_colors):
     cmap_name = STYLE_CMAPS.get(style, "bone") #default to bone map
-    cmap = plt.get_cmap(cmap_name)
+    cmap = _get_cmap(cmap_name)
     colors = [cmap(i / max(n_colors - 1, 1)) for i in range(n_colors)]
     mpl.rcParams["axes.prop_cycle"] = cycler(color=colors)
     mpl.rcParams["image.cmap"] = cmap_name
     
 
 def use(style, n_colors=8):
-    plt.style.use(f"styles/{style}.mplstyle")
+    style_path = STYLE_DIR / f"{style}.mplstyle"
+    plt.style.use(style_path)
     _set_cycle_from_cmap(style, n_colors)
 
 @contextmanager
 def context(style, n_colors=8):
-    #when using the context manager just set this globally
     with mpl.rc_context():
-        plt.style.use(f"styles/{style}.mplstyle")
-        _set_cycle_from_cmap(style, n_colors)
-        yield
-
-STYLE_DIR = Path(__file__).parent / "styles"
-
-@contextmanager
-def context(style, n_colors=8):
-    with mpl.rc_context():
-
         style_path = STYLE_DIR / f"{style}.mplstyle"
-
-        print(style_path.resolve())      # debug
-        print(style_path.exists())       # debug
-
         plt.style.use(style_path)
 
         _set_cycle_from_cmap(style, n_colors)
         yield
+
+
+
+
+

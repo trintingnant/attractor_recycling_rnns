@@ -307,6 +307,9 @@ def get_model_conn_vecs(model,
 					  dtype='float32')
 
 	m, n, w_in, w_out = get_lr_net_params(model)
+
+	# adjust for w_in scale
+	w_in = model.params["w_in_scale"] * w_in
 	
 	#keep only the orthogonal part of I -> no drive along m
 	#Ref: Valente 2019, Dubreuil Valente et al. 2022, etc.
@@ -348,7 +351,7 @@ def get_overlap_matrix_all_params(conn_vecs, pops=None):
 	including inputs and outputs
 	ATTENTION: this will yield an upper triangular matrix for plotting interfacing
 	to obtain full covariances run the function below
-	TODO: should be integrated.
+	TODO: should be integrated. 
 	"""
 
 	num_params = conn_vecs.shape[0]
@@ -371,10 +374,6 @@ def get_overlap_matrix_all_params(conn_vecs, pops=None):
 				ov_mat[i,j, elem] = cov / counts[elem]
 
 	return ov_mat
-
-def build_covariance_from_tri(cov):
-    return cov + cov.T - np.eye(cov.shape[0])*np.diag(cov)
-
 
 def proj_spd(cov):
 	"""
@@ -411,32 +410,6 @@ def proj_spd(cov):
 
 	return cov_new
 
-def get_eff_overlap_matrix(model, fp):
-	"""
-	obtains effective recurrent weight matrix under input modulation
-	"""
-
-	r = model.rnn.rank
-	m, n, w_in, _ = get_lr_net_params(model)
-
-	if fp._check:
-		x = fp.x_star.detach().numpy()
-	else:
-		print("Overlap matrix could not be computed. Likely cause: missing fixed point.")
-		return None
-
-	effN = np.array([n[i,:] * phiPrime(x) for i in range(r)])
-	ov_jac = effN[:,0,:] @ m / model.rnn.net_size
-	try:
-		res = (np.array([np.outer(m[:,i], effN[i,0,:])for i in range(r)])).sum() \
-						/ model.rnn.net_size - np.eye(r)
-
-	except:
-		print("Overlap matrix could not be computed. ")
-		return None
-
-	return res, ov_jac
-
 def extract_num_pops(pops):
 	return len(set(pops)) if pops is not None else 1
 
@@ -467,8 +440,6 @@ TODO: implement rejection sampling for non-spd covariance matrices
 add noise to chols, then sample until matrix is SPD.
 """
 
-#=====================MEAN FIELD================================
-
 def make_MF_covs_pop_dyn(cov_params):
 
     """
@@ -494,7 +465,7 @@ def make_MF_covs_pop_dyn(cov_params):
     sdOm = cov_params["sdOm"] #covariance of the off-diagonal elements -> set frequency (i.e. clockwise vs. counter-clockwise)
     sdI = cov_params["sdI"] #variance of the respective inputs, one per pop
     sdmW = cov_params["sdmW"] #covariance of the recurrent- and output directions
-    sdnI = cov_params["sdI"] #covariance between the input-selection and input vectors
+    sdnI = cov_params["sdnI"] #covariance between the input-selection and input vectors
     sdnW = cov_params["sdnW"] #covariance between the input selection vectors and the ouputs.
     sdW = cov_params["sdW"] #variance of the output vectors (should be roughly OOM as sdM)
     
@@ -505,19 +476,19 @@ def make_MF_covs_pop_dyn(cov_params):
                     [0, sdM, -sdOm, sdR, 0, 0, -sdmW, sdmW],
                     [sdR, -sdOm, sdM, 0, sdnI, sdnI, 0, -sdnW],
                     [sdOm, sdR, 0, sdM, sdnI, sdnI, -sdnW, 0],
-                    [0, 0, sdnI, sdnI, sdI, 0, 0, 0],
+                    [0, 0, sdnI, sdnI, 0, 0, 0, 0],
                     [0, 0, sdnI, sdnI, 0, sdI, 0, 0],
                     [-sdmW, -sdmW, 0, -sdnW, 0, 0, sdW, 0],
                     [-sdmW, sdmW, -sdnW, 0, 0, 0, 0, sdW]]
                     )
     
     
-    cov2 = np.array([[sdM, 0, sdR, -sdOm, 0, 0, -sdmW, -sdmW],
-                    [0, sdM, sdOm, sdR, 0, 0, -sdmW, sdmW],
+    cov2 = np.array([[sdM, 0, sdR, -sdOm, 0, 0, sdmW, -sdmW],
+                    [0, sdM, sdOm, sdR, 0, 0, sdmW, sdmW],
                     [sdR, sdOm, sdM, 0, sdnI, sdnI, -sdnW, 0],
                     [-sdOm, sdR, 0, sdM, sdnI, sdnI, 0, sdnW],
                     [0, 0, sdnI, sdnI, sdI, 0, 0, 0],
-                    [0, 0, sdnI, sdnI, 0, sdI, 0, 0],
+                    [0, 0, sdnI, sdnI, 0, 0, 0, 0],
                     [-sdmW, -sdmW, 0, -sdnW, 0, 0, sdW, 0],
                     [-sdmW, sdmW, sdnW, 0, 0, 0, 0, sdW]]
                     )
@@ -579,8 +550,10 @@ def make_MF_covs_attr_dyn(cov_params):
 
 	if np.linalg.eigh(cov)[0][0] < 0:
 		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
+
+	chol = np.linalg.cholesky(cov)
 	
-	return cov
+	return cov, chol
 
 def make_MF_covs_LC(cov_params):
 
@@ -594,21 +567,25 @@ def make_MF_covs_LC(cov_params):
 	sdM = cov_params["sdM"]
 	sdR = cov_params["sdR"]
 	sdOm = cov_params["sdOm"]
+	sdmW = cov_params ["sdmW"]
 
-	cov = np.array([[sdM, 0, sdR, sdOm, 0, 0],
-				 	[0, sdM, -sdOm, sdR, 0, 0],
-					[sdR, -sdOm, sdM, 0, 0, 0],
-					[sdOm, sdR, 0, sdM, 0, 0],
-					[0, 0, 0, 0, eps, 0],
-					[0, 0, 0, 0, 0, eps]
+	cov = np.array([[sdM, 0, 0, sdR, sdOm, 0, 0, 0, sdmW, 0],
+				 	[0, sdM, 0, -sdOm, sdR, 0,  0, 0, 0, sdmW],
+					[0, 0, sdM, 0, 0, 0, 0, 0, 0, 0],
+					[sdR, -sdOm, 0, sdM, 0, 0, 0, 0, 0, 0],
+					[sdOm, sdR, 0, 0, sdM, 0, 0, 0, 0, 0],
+					[0, 0, 1.1, 0, 0, sdM, 0, 0, 0, 0],
+					[0, 0, 0, 0, 0, 0, eps, 0, 0, 0],
+					[0, 0, 0, 0, 0, 0, 0, eps, 0, 0],
+					[sdmW, 0, 0, 0, 0, 0, 0, 0, eps, 0],
+					[0, sdmW, 0, 0, 0, 0, 0, 0, 0, eps]
 					])
-	
-	if np.linalg.eigh(cov)[0][0] < 0:
-		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
-	
-	return cov
 
-def make_MF_covs_LC3D(cov_params):
+	cov = proj_spd(cov)
+	chol = np.linalg.cholesky(cov)
+	return cov, chol
+
+def make_MF_covs_LC2D(cov_params):
 
 	"""
 	Covariance matrix that produces an endogenously generated LC
@@ -620,106 +597,52 @@ def make_MF_covs_LC3D(cov_params):
 	sdM = cov_params["sdM"]
 	sdR = cov_params["sdR"]
 	sdOm = cov_params["sdOm"]
+	sdmW = cov_params["sdmW"]
 
-	cov = np.array([[sdM, 0, 0, sdR, sdOm, 0, 0, 0],
-				 	[0, sdM, 0, -sdOm, sdR, 0,  0, 0],
-					[0, 0, sdM, 0, 0, 0, 0, 0],
-					[sdR, -sdOm, 0, sdM, 0, 0, 0, 0],
-					[sdOm, sdR, 0, 0, sdM, 0, 0, 0, 0],
-					[0, 0, 0, 0, 0, 0, eps, 0],
-					[0, 0, 0, 0, 0, 0, 0, eps]
+	cov = np.array([[sdM, 0, sdR, sdOm, 0, 0, sdmW, 0],
+				 	[0, sdM, -sdOm, sdR, 0, 0, 0, sdmW],
+					[sdR, -sdOm, sdM, 0, 0, 0, 0, 0],
+					[sdOm, sdR, 0, sdM, 0, 0, 0, 0],
+					[0, 0, 0, 0, sdM, 0, 0, 0],
+					[0, 0, 0, 0, 0, sdM, 0, 0],
+					[sdmW, 0, 0, 0, 0, 0, eps, 0],
+					[0, sdmW, 0, 0, 0, 0, 0, eps]
 					])
 	
 	if np.linalg.eigh(cov)[0][0] < 0:
 		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
 	
-	return cov
+	chol = np.linalg.cholesky(cov)
 
-def make_MF_covs_RA(cov_params):
-	"""
-	Covariance matrix that produces endogenoluslt generated RA
-	"""
-	#simply do it by setting sdOM to 0 and calling make_MF_covs_LC
-	cov_params["sdOm"] = 0
-	return make_MF_covs_LC(cov_params)
-	
-	
-def make_MF_covs_attr_inhib(cov_params):
+	return cov, chol
 
-	"""
-    Create covariance matrices for the model relying on attractor dynamix
-	mutual inhibition stabilises attractors 
+def extract_idxs(model):
 
-    Args:
-        cov_params: dictionary of covariance parameters
-    
-    Returns:
-        covs: covariance matrices
+	r = model.rnn.rank
+	in_dim = model.rnn.in_dim
+	nidx = r
+	Iidx = 2 * r
+	Widx = 2 * r + in_dim
 
-    Here we have:
-		- A single population with two limit cycle attractors arranged in orthogonal planes
-		- Input does not modulate activity 
-		- Saturation of the dynamics through the non-linearity comes purely from size of the 
-		hidden acitivity (radius in each plane) and mutual inhibition
-        - Covariance matrix is 12-d
-        
-    """
-
-	eps = 1e-2
-
-	sdM = cov_params["sdM"] #variance of ms (and ns)
-	sdR = cov_params["sdR"] #covariance of the diagonal elements -> set radius
-	sdOm = cov_params["sdOm"] #covariance of the off-diagonal elements -> set frequency (i.e. clockwise vs. counter-clockwise)
-	sdI = cov_params["sdI"] #variance of the respective inputs, one per pop
-	sdmW = cov_params["sdmW"] #covariance of the recurrent- and output directions
-	sdnI = cov_params["sdI"] #covariance between the input-selection and input vectors
-	sdnW = cov_params["sdnW"] #covariance between the input selection vectors and the ouputs.
-	sdW = cov_params["sdW"] #variance of the output vectors (should be roughly OOM as sdM)
-	sd_inhib = cov_params["sdIhib"]
-	 
-
-	cov = np.array([[sdM, 0, 0, 0, sdR, -sdOm, sd_inhib, 0, 0, 0, eps, eps],
-				 	[0, sdM, 0, 0, sdOm, sdR, 0, sd_inhib, 0, 0, eps,eps],
-					[0, 0, sdM, 0, sd_inhib, 0, sdR, sdOm, 0, 0, eps, eps],
-					[0, 0, 0, sdM, 0, sd_inhib, -sdOm, sdR, 0, 0, eps,eps],
-					[sdR, sdOm, sd_inhib, 0, sdM, 0, 0, 0, sdnI, 0, 0, 0],
-					[-sdOm, sdR, 0, sd_inhib, 0, sdM, 0, 0, sdnI, 0, 0, 0],
-					[sd_inhib, 0, sdR, -sdOm, 0, 0, sdM, 0, 0, sdnI, 0, 0],
-					[0, sd_inhib, sdOm, sdR, 0, 0, 0, sdM, 0, sdnI, 0, 0],
-					[0, 0, 0, 0, sdnI, sdnI, 0, 0, sdI, 0, 0, 0],
-					[0, 0, 0, 0, 0, 0, sdnI, sdnI, 0, sdI, 0, 0],
-					[eps, eps, eps, eps, 0, 0, 0, 0, 0, 0, 0, 0],
-					[eps, eps, eps, eps, 0, 0, 0, 0, 0, 0, 0, 0]
-					])
-	"""
-	if np.linalg.eigh(cov)[0][0] < 0:
-		cov -= np.eye(cov.shape[0])*(np.linalg.eigh(cov)[0][0] - eps)
-	"""
-	return cov
-
+	return nidx, Iidx, Widx
 
 def compute_deltas(model, k):
 	"""
 	computes deltas of populations for MeanFieldRNNCells
-	NOTE: expects np.arrays 
-	NOTE: x is the full state vector of latents (including input latents)
-	TODO: streamline this with the rnn specific-functions
 	"""
-	r = model.rnn.rank
-	in_dim = model.rnn.in_dim 
+	
 	covs = model.rnn.covs.detach().numpy() 
+	
 
-	K = k[:,:r]
-	V = k[:,r:]
-	V 
-	nidx = r
-	Iidx = 2*r
-	Widx = 2*r + in_dim
+	K = k[:,:model.rnn.rank]
+	V = k[:,model.rnn.rank:]
+	
+	nidx, Iidx, Widx = extract_idxs(model)
 	deltas = np.sum(
 				np.hstack(
 					(
-					np.einsum('...iik, ...li -> ...lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
-					np.einsum('...iik, ...li -> ...lik', covs[:nidx, :nidx, :], K**2)
+					np.einsum('iik, li -> lik', covs[Iidx:Widx, Iidx:Widx,:], V**2),
+					np.einsum('iik, li -> lik', covs[:nidx, :nidx, :], K**2)
 					), 
 				), axis=1
 			)
@@ -734,14 +657,130 @@ def gPrime(deltas):
 	"""Derivative of g"""
 	return -(np.pi / 2) * g(deltas)**3
 
-#===================MISCELLANEOUS=============================
+def compute_fixed_point_simple(model,
+							   in_,
+							   xlims=[-1,1],
+							   ylims=[-1,1],
+							   trnst=0,
+							   num_fp_trials=20,
+							   dist_thresh=1e-2
+							   ):
 	
+	"""
+	alternative to the fp-finder class for really low-d models (i.e. meanfields)
+	"""
+
+	#TODO: integrate this into plotting func.
+	from scipy.optimize import root
+
+	def dkdt(k):
+		
+		nidx, Iidx, Widx = extract_idxs(model)
+		weights = model.rnn.weights.detach().numpy()
+		covs = model.rnn.covs.detach().numpy()
+		
+		if len(k.shape)==1:
+			k = k.reshape(1, k.shape[0])
+
+		K = k[:,:2]
+		V = k[:,2:]
+		rec_input = np.stack(
+							(np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, :nidx,:], K),
+							np.einsum('...ijk, ...lj -> ...lik', covs[nidx:Iidx, Iidx:Widx,:], V) 
+							)
+						)
+		
+		gains = g(compute_deltas(model, k))
+		rec_input = (rec_input * weights * gains).sum(axis=(0,3))
+		dkdt = -K + rec_input
+		return dkdt
+	
+            
+	def DKDT(k, input):
+		"""
+		This is the function passed to the root solver
+		"""
+
+		k_full = torch.from_numpy(
+					np.hstack((
+						np.expand_dims(k, axis=0), 
+						np.expand_dims(input, axis=0)
+						))
+					).to(torch.float32)
+		dkdt_ = dkdt(k_full)
+		return dkdt_[0,:2].detach().numpy()
+
+	X_grid, Y_grid = np.meshgrid(
+							np.linspace(xlims[0], xlims[1], int(np.sqrt(num_fp_trials))),
+							np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
+							)
+	
+	fps = []
+	for i in range(X_grid.ravel().size):
+		x0 = np.array([X_grid.ravel()[i], Y_grid.ravel()[i]])
+		
+		#again, assume input equilibriates
+		sol = root(DKDT, x0=x0, args=in_)
+		if all([np.linalg.norm(sol.x - other.x) > dist_thresh for other in fps]):
+			fps.append(sol)
+	jacs = []
+	for fp in fps:
+		k = fp.x
+		jac = compute_jacobian_mf_analytical(model, k, in_)
+		jacs.append(jac)
+	
+	return fps, jacs
+
+
+def compute_jacobian_mf_analytical(model, k, in_):
+	"""
+	return the jacobian of the model dynamics at k, with input in_
+	Args:
+		model: the model
+		k: np.array[rank] -> the fixed point 
+		in_: np.array[in_dim] -> the input
+	Return:
+		S: np.array[rank x rank] -> the jacobian
+
+	"""
+	nidx, Iidx, Widx = extract_idxs(model)
+	#this is just for the delta computation
+	k_ = np.hstack((np.expand_dims(k, axis=0),
+               np.expand_dims(in_, axis=0))
+			)
+
+	covs = model.rnn.covs.detach().numpy()
+	weights = model.rnn.weights.unsqueeze(dim=0).detach().numpy().astype(np.float64)
+	deltas = compute_deltas(model, k_)
+	S = -np.eye(model.rnn.rank)
+	S += (covs[nidx:Iidx, :nidx, :] * g(deltas) * weights).sum(axis=2)
+
+	#Correction term
+	sk = (np.einsum('ijk, j -> ik', covs[nidx:Iidx, :nidx, :], k)
+		+ np.einsum('ijk, j -> ik', covs[nidx:Iidx, Iidx:Widx], in_)
+		) 
+	sk += np.einsum('iik, i -> ik', covs[:nidx, :nidx, :], k)
+	S += (sk * gPrime(deltas)**3 * weights)
+
+	return S
+
+#===============MISCELLANEOUS===================
+
+def to_numpy(x):
+            if torch.is_tensor(x):
+                  return (x
+                          .detach()
+                          .numpy()
+                          )
+            
+            return np.asarray(x)
+
 def build_state_dicts_from_params(params, idx):
     from collections import OrderedDict
     state_dict = OrderedDict(
                 ("rnn." + name, torch.from_numpy(param))
                 for name, param in params[idx].items()
-				)
+)
     return state_dict
 
 def reset_model_from_params_idx(model, params, idx):
@@ -751,6 +790,132 @@ def reset_model_from_params_idx(model, params, idx):
 	"""
 	state_dict = build_state_dicts_from_params(params, idx)
 	model.load_state_dict(state_dict, strict=False)
+
+def compute_rate_similarity(rates, base_idx, trnst):
+
+	base_idx = 0
+	trnst = 0
+	_, S_base, _ = np.linalg.svd(rates[base_idx, trnst:,:])
+	sims = []
+
+	for idx in range(rates.shape[0]):
+		U, S, V = np.linalg.svd(rates[idx,trnst:,:])
+		sim = (np.linalg.norm(rates[base_idx,...] @ rates[idx, ...].T) 
+		 		/ np.linalg.norm(np.multiply(S, S_base))
+			)
+		sims.append(sim)
+
+	return sims
+
+def compute_similarities_by_rank(rates, 
+								 base_idx, 
+								 trnst,
+								 max_rank
+	): 
+	"""
+	Computes the similarities as before, but truncates
+	the SVD at successive ranks. This is to illicit 
+	at what point the dissimilarity arises. 
+
+	NOTE: We observe that for the attractor solution with slaving
+	the trajectories explore exactly the same low-dimensional
+	subspace (though differently), with differences residing
+	only at higher ranks.
+
+	In effect, this means that our Procrustes-like measure
+	is not really a super-solid diagnostic criterion,
+	because attractor structure can also manifest itself
+	in the WAY a the same subspace is explored, rather
+	than the subspace itself. 
+	
+	"""
+
+	similarities_by_rank = {}
+	for rank in range(1, max_rank):
+
+		rates_rank = []
+		for idx in range(rates.shape[0]):
+			X = rates[idx]
+
+			U, S, Vh = np.linalg.svd(
+				X,
+				full_matrices=False
+			)
+			X_rank = (
+				U[:, :rank]
+				@ np.diag(S[:rank])
+				@ Vh[:rank]
+			)
+			rates_rank.append(X_rank)
+
+		rates_rank = np.asarray(rates_rank)
+
+		similarities_by_rank[rank] = compute_rate_similarity(
+			rates_rank,
+			base_idx,
+			trnst
+		)
+	return similarities_by_rank
+
+def unwrapped_angles(u, v):
+    """
+	Unwrap the arctan angles
+    """
+
+    theta = np.unwrap(
+        np.arctan2(v, u),
+        axis=-1
+    )
+
+    return theta
+
+# function simple function to prepare multi-model loading
+def subdirs(path, start):
+    for root, dirs, _ in os.walk(path):
+        for dirname in dirs:
+            if dirname.startswith(start):
+                yield os.path.join(root, dirname)
+
+
+def oscillatory_mode_spectrum(rates, omega, trnst=0):
+    """
+    Computes the strength of dynamics at a particular frequency via the SVD
+
+    omega: angular frequency in radians / timestep
+    """
+
+    modes = []
+
+    for c in range(2):
+
+        X = rates[c, trnst:, :]
+        X = X - X.mean(axis=0, keepdims=True)
+        t = np.arange(X.shape[0])
+
+        z = np.sum(
+            X * np.exp(-1j * omega * t)[:, None],
+            axis=0
+        )
+
+        modes.extend([
+            np.real(z),
+            np.imag(z)
+        ])
+
+    H = np.stack(modes, axis=1)
+
+    _, S, _ = np.linalg.svd(
+        H,
+        full_matrices=False
+    )
+
+    energy = S**2
+    energy /= energy.sum() + 1e-12
+
+    return {
+        "singular_values": S,
+        "variance_fractions": energy,
+    }
 
 
 

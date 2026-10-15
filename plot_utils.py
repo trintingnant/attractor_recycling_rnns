@@ -8,7 +8,7 @@ from rnn import RNN, run_rnn
 from default_params import default_params
 import numpy as np
 from sklearn.decomposition import PCA
-
+from utils import * 
 
 #PATHS
 import sys
@@ -18,9 +18,11 @@ from FixPointSearch.FixedPoint import FixedPoint
 sys.path.append('../styles')
 import plotstyle
 
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
 NUM_ANGLES = 25
 
-#=======GENERAL UTILITY FUNCTIONS FOR AX MANIPULATION========
+#=======GENERAL UTILITY FUNCTIONS FOR AX AND COLOR MANIPULATION========
 
 def center(ax):
     ax.spines['top'].set_visible(False)
@@ -34,11 +36,151 @@ def center(ax):
 def make_naked(ax):
     ax.axis('off')
 
+def set_colors(num_colors):
+
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    base_colors = prop_cycle.by_key()['color']
+    idxs = np.linspace(0, len(base_colors)-1, num_colors, dtype=int)
+    colors = [base_colors[idx] for idx in idxs]
+
+    return colors
+
+
+def add_arrowhead_3d(
+    ax,
+    x,
+    y,
+    z,
+    t,
+    dt=3,
+    color="black",
+    head_length=0.18,
+    head_width=0.16,
+):
+    
+    """
+    Arrow plotting, mainly for cylindrical figure plots.
+    But could also be used in other plots (though in the current
+    form they need to be 3d)
+    
+    """
+
+    p0 = np.array([x[t], y[t], z[t]])
+    p1 = np.array([x[t+dt], y[t+dt], z[t+dt]])
+
+    d = p1 - p0
+    d = d / np.linalg.norm(d)
+
+    n = np.array([x[t+dt], y[t+dt], 0.0])
+    n = n / np.linalg.norm(n)
+
+    s = np.cross(n, d)
+    s = s / np.linalg.norm(s)
+
+    tip = p1
+
+    left  = tip - head_length*d + head_width*s
+    right = tip - head_length*d - head_width*s
+
+    verts = [[left, tip, right]]
+
+    poly = Poly3DCollection(
+        verts,
+        facecolor=color,
+        edgecolor=color,
+        linewidth=0.5,
+        alpha=1.0
+    )
+
+    ax.add_collection3d(poly)
+
+
+def set_pi_yticks(ax, sparsity=2):
+
+    """
+    Set the y ticks with pi
+    """
+
+    ymin, ymax = ax.get_ylim()
+
+    nmin = int(np.floor(ymin / np.pi))
+    nmax = int(np.ceil(ymax / np.pi))
+
+    ticks = np.arange(nmin, nmax + 1) * np.pi
+
+    labels = []
+
+    for n in range(nmin, nmax + 1):
+        if n == 0:
+            labels.append(r"$0$")
+        elif n == 1:
+            labels.append(r"$\pi$")
+        elif n == -1:
+            labels.append(r"$-\pi$")
+        else:
+            labels.append(rf"${n}\pi$")
+
+    ticks = ticks[::sparsity]
+    labels = labels[::sparsity]
+
+    ax.set_yticks(ticks)
+    ax.set_yticklabels(labels)
+
+    return ax
+
+def set_pi_xticks(ax):
+
+    """
+    Set the x ticks with pi
+    """
+
+    ymin, ymax = ax.get_xlim()
+
+    nmin = int(np.floor(ymin / np.pi))
+    nmax = int(np.ceil(ymax / np.pi))
+
+    ticks = np.arange(nmin, nmax + 1) * np.pi
+
+    labels = []
+    for n in range(nmin, nmax + 1):
+        if n == 0:
+            labels.append(r"$0$")
+        elif n == 1:
+            labels.append(r"$\pi$")
+        elif n == -1:
+            labels.append(r"$-\pi$")
+        else:
+            labels.append(rf"${n}\pi$")
+
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels)
+
+    return ax
+
+def get_colors(num_colors):
+
+    prop_cycle = plt.rcParams['axes.prop_cycle']
+    base_colors = prop_cycle.by_key()['color']
+    idx = np.linspace(0, len(base_colors)-1, num_colors, dtype=int)
+    colors = [base_colors[i] for i in idx]
+    
+    return colors
+    
+
 #=======REGULAR PLOT UTILS=====================
 
-def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
+def plot_spectrum(model, 
+                  w_rec=True, 
+                  mat: Optional[np.ndarray]=None, 
+                  ax=None, 
+                  **kwargs
+    ):
 
     """Plots the eigenvalue spectrum of a (RNN-weight)-matrix"""
+
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
 
     from matplotlib.patches import Circle, Arc
     
@@ -50,7 +192,6 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
     
     eigvecs, eigvals = np.linalg.eig(w_rec)[::-1]
     real, imag = np.real(eigvals), np.imag(eigvals)
-    fig, ax = plt.subplots()
     plt.tick_params(
         axis='both',       # changes apply to the x-axis
         which='both',      # both major and minor ticks are affected
@@ -59,38 +200,32 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
         labelbottom=False,
         labelleft=False,
         left=False)
-    ax.set_ylabel(r"$Im(\lambda$)")
-    ax.set_xlabel(r"$Re(\lambda$)")
+    ax.set_ylabel(r"$Im(\lambda$)",
+                  loc="top", 
+                  rotation=0, 
+                  fontsize=9
+                  )
+    ax.set_xlabel(r"$Re(\lambda$)", 
+                  loc="right", 
+                  fontsize=9
+                  )
+    ax.legend('off')
     ax.set_aspect("equal", adjustable="box")
     r = 2*model.params["spectral_radius"]
-    
-    """
-    arc = Arc((0,0), r, r, 
-              color='silver', 
-              theta1=330, 
-              theta2=30, 
-              linewidth=5,
-              linestyle='--',
-              label=r"$g$")
-    arc2 = Arc((0,0), 2, 2, 
-              color='black', 
-              theta1=330, 
-              theta2=30, 
-              linewidth=5,
-              linestyle='--',
-              label="stability line")
-    
-    
-    ax.add_patch(arc)
-    ax.add_patch(arc2)
-    """
 
     c = [1 if r > 1 else 0 for r in real]
     circle = Circle((0,0), model.params["spectral_radius"], fill=True, alpha=0.2, color="black", 
                     label=r"$g={0}$".format(model.params["spectral_radius"]), zorder=-1)
     ax.add_artist(circle)
     ax.scatter(real, imag, c=c, alpha=.8, zorder=10)
-    #plot stability li
+    ax.axvline(1.0,
+               color="black",
+               alpha=.6,
+               linewidth=.8,
+               linestyle="-."
+               )
+
+    #plot stability line 
     ymin, ymax = 1.2*np.min(imag), 1.2*np.max(imag)
     xmin, xmax = 1.2*np.min(real), 1.2*np.max(real)
     ax.spines['top'].set_visible(False)
@@ -98,16 +233,152 @@ def plot_spectrum(model, w_rec=True, mat: Optional[np.ndarray]=None, **kwargs):
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
     ax.set_aspect("equal", adjustable="box")
-    ax.axvline(x=1, ymin=ymin, ymax=ymax,  c="black", linestyle='--', label="stability line", alpha=.5)
-    ax.axvline(x=0, ymin=ymin, ymax=ymax, c="grey", alpha=.2)
-    ax.axhline(y=0, c="grey", alpha=.2)
-    ax.scatter(0,0, facecolors=None, c='grey', alpha=.2, zorder=-1)
-    ax.plot()
-    ax.legend()
-    
+    center(ax)
 
-    plt.show()
-    return fig, ax
+
+def plot_input_interpolation(num_angles):
+    
+    fig, ax = plt.subplots(
+    subplot_kw={"projection": "polar"},
+    figsize=(4, 4),
+    )
+
+    ax.set_thetamin(0)
+    ax.set_thetamax(90)
+
+    # Tick locations
+    ticks = np.array([0, 15, 30, 45, 60, 75, 90])
+
+    # Convert to radians
+    ax.set_xticks(np.deg2rad(ticks))
+
+    # Pi-style labels
+    ax.set_xticklabels([
+        r"$0$",
+        r"$\frac{\pi}{12}$",
+        r"$\frac{\pi}{6}$",
+        r"$\frac{\pi}{4}$",
+        r"$\frac{\pi}{3}$",
+        r"$\frac{5\pi}{12}$",
+        r"$\frac{\pi}{2}$",
+    ])
+
+    ax.set_ylim(0, 1)
+
+    angles = [
+        (0, r"$0$"),
+        (np.pi/6, r"$\frac{\pi}{6}$"),
+        (np.pi/4, r"$\frac{\pi}{4}$"),
+        (np.pi/3, r"$\frac{\pi}{3}$"),
+        (np.pi/2, r"$\frac{\pi}{2}$"),
+    ]
+
+    ax.set_xticks([a for a, _ in angles])
+    ax.set_xticklabels([lab for _, lab in angles])
+
+    arrow_angles = np.linspace(0, np.pi/2, num_angles)
+    colors = set_colors(num_angles)
+
+    for theta, c in zip(arrow_angles, colors):
+
+        ax.annotate(
+            "",
+            xy=(theta, 1.0),     
+            xytext=(theta, 0.0), 
+            arrowprops=dict(
+                arrowstyle="-|>",
+                lw=2.5,
+                color=c,
+                shrinkA=0,
+                shrinkB=0,
+            ),
+        )
+
+    theta = np.linspace(0, np.pi/4, 200)
+    r = 0.4
+
+    ax.plot(theta, np.full_like(theta, r), 
+            lw=1, 
+            linestyle="--", 
+            c="black", 
+            alpha=.4,
+            zorder=100
+            )
+
+    ax.plot([np.pi/4, np.pi/4], 
+            [0, r], 
+            lw=1, 
+            linestyle="--", 
+            c="black", 
+            alpha=.4,
+            zorder=100
+            )
+
+    ax.text(
+        np.pi/8,
+        .2,
+        r"$\psi$",
+        fontsize=24,
+        alpha=.5,
+        ha="center",
+        va="center",
+    )
+
+    ax.grid(True, alpha=0.35)
+    ax.spines["polar"].set_linewidth(2)
+
+    return ax
+
+def plot_traj_similarity(rates, base_idx=0, trnst=0):
+
+    from fractions import Fraction
+    from matplotlib.ticker import FixedLocator
+    from utils import compute_rate_similarity
+
+    sims = compute_rate_similarity(rates, base_idx, trnst)
+
+    colors = set_colors(rates.shape[0])
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    angles = np.linspace(0, np.pi/2, rates.shape[0])
+    ax.set_xlim(0, np.pi/2)
+    ticks = np.arange(0, np.pi/2+np.pi/8, np.pi/8)
+    ax.xaxis.set_major_locator(FixedLocator(ticks))
+
+    ax.scatter(angles, sims, c=colors, marker='s')
+    ax.plot(angles, sims, c='silver', linestyle='--', alpha=.5, zorder=0)
+    ax.set_ylim(min(sims)-.1 * min(sims), max(sims)+.1 * max(sims))
+    ax.scatter(
+        0,
+        sims[0],
+        s=150,               
+        facecolors='none',   
+        edgecolors='black',   
+        linewidths=.5,
+        label="reference"
+    )
+
+    labels = []
+    for t in ticks:
+        frac = Fraction(t / np.pi).limit_denominator()
+        n, d = frac.numerator, frac.denominator
+        if n == 0:
+            labels.append(r"$0$")
+        elif d == 1:
+            if n == 1:
+                labels.append(r"$\pi$")
+            else:
+                labels.append(rf"${n}\pi$")
+        else:
+            if n == 1:
+                labels.append(rf"$\frac{{\pi}}{{{d}}}$")
+            else:
+                labels.append(rf"$\frac{{{n}\pi}}{{{d}}}$")
+
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels)
+
+    return ax
 
 def plot_multitask_net_response(model, trial, antitrial):
     fig, axs = plt.subplots(2,1, sharey=False, sharex=True) 
@@ -119,13 +390,40 @@ def plot_multitask_net_response(model, trial, antitrial):
     axs[0].set_xlim(0, 200)
     axs[0].plot(out.detach().numpy()[0,:,:], c="b", alpha=.5)
     axs[0].plot(target, "-.", c="black", alpha=.5)
-    axs[1].set_title('Antitask')
+    #axs[1].set_title('Antitask')
     axs[1].plot(antiout.detach().numpy()[0,:,:], c="r", alpha=.5)
     axs[1].plot(antitarget, "-.", c="black", alpha=.5)
 
-    axs[0].set_title('Task')
+    #axs[0].set_title('Task')
     plt.tight_layout(w_pad=1.5, h_pad=1.5)
     plt.show() 
+
+    return axs
+
+def plot_dynamix_low_rank(model, inputs):
+    
+    rates, _ = run_rnn(model, inputs)
+    m = model.rnn.m.detach().numpy()
+    ks = proj_(m.T, rates)
+    num_inputs = inputs.shape[0]
+
+    fig, axs = plt.subplots(model.rnn.rank, 1)
+    for i in range(num_inputs):
+        for j in range(model.rnn.rank):
+            axs[j].plot(ks[i,j,:])
+
+    return axs
+
+def plot_dynamix_mean_field(model, inputs):
+
+    rates, _ = run_rnn(model, inputs)
+    ks = rates[...,:model.rnn.rank]
+    num_inputs = inputs.shape[0]
+
+    fig, axs = plt.subplots(model.rnn.rank, 1)
+    for i in range(num_inputs):
+        for j in range(model.rnn.rank):
+            axs[j].plot(ks[i,:,j])
 
     return axs
 
@@ -174,7 +472,6 @@ def plot_common_projections(model,
     ax.arrow(*projs[0,t], *(projs[0,t+dt]-projs[0,t]), head_width=axWidth/asp_ratio, lw=0, alpha=.8)
     
     return ax
-
 
 
 def create_common_projections_grid(model, 
@@ -579,7 +876,6 @@ def plot_vector_field_MF(model,
             return dkdt_[0,:2].detach().numpy()
     
         from scipy.optimize import root
-
         X_grid, Y_grid = np.meshgrid(
                                 np.linspace(xlims[0], xlims[1], int(np.sqrt(num_fp_trials))),
                                 np.linspace(ylims[0], ylims[1], int(np.sqrt(num_fp_trials)))
@@ -600,6 +896,7 @@ def plot_vector_field_MF(model,
                          input[trnst,:]
                         )
             )
+        
             """
             gains = compute_deltas(model, k)
             from scipy.optimize._numdiff import approx_derivative
@@ -609,8 +906,12 @@ def plot_vector_field_MF(model,
             #eigvals, _= np.linalg.eig(Jac)
             print(eigvals)
             """
+    if find_fps:
+        return ax, fps
+    
+    else:
+        return ax
 
-    return ax
     
 def plot_input_interpolation_lr(model, 
                                 inputs, 
@@ -642,71 +943,6 @@ def plot_input_interpolation_lr(model,
 
     plt.show()
 
-
-
-def plot_traj_similarity(model, inputs, base_idx=0, num_angles=NUM_ANGLES, trnst=100):
-
-    """
-    Computes and plots similarity of RNN trajectories for different inputs, as
-    computed through alignment of SVD components
-    """
-
-    import matplotlib.ticker as tck
-    num_inputs = inputs.shape[0]
-    plt.rcParams["axes.prop_cycle"] = plt.cycler("color", plt.cm.coolwarm(np.linspace(0,1, num_inputs)))
-    colors1 = plt.cm.coolwarm(np.linspace(0, 1, inputs.shape[0]))
-
-    num_inputs = inputs.shape[0]
-    rates, out = model(inputs[0, :, :].unsqueeze(dim=0))
-    ratess = torch.zeros((num_inputs, *rates.shape[1:]))
-    ratess[0, :] = rates
-    
-    for inputs_idx in range(1, num_inputs):
-        rates, out = model(inputs[inputs_idx, :, :].unsqueeze(dim=0))
-        ratess[inputs_idx, :, :] = rates.squeeze()
-    
-    #base rates for comparison
-    rates_base = ratess[base_idx,trnst:,:].detach().numpy().squeeze()
-    U_base, S_base, V_base = np.linalg.svd(rates_base)
-    sims = []
-
-    #this is just for the tickering -> TODO: convert to pi
-    angles = np.array([np.arccos(inputs[idx,0,0] / np.linalg.norm(inputs[idx,0,0])) for idx in range(inputs.shape[0])])
-    angle = angles[0]
-    angles = [np.angle(complex(np.cos(angle), np.sin(angle)), deg=True) for angle in angles] 
-
-    calc_m = lambda rates_base, rates, S_base, S: np.linalg.norm(
-            rates_base @ rates.T
-            ) \
-               / np.linalg.norm(
-                    np.multiply(S_base,S)
-                )
-    
-    #calculate alignments for all inputs and store 
-    for input_idx in range(num_inputs):
-        U, S, V = np.linalg.svd(ratess[input_idx,trnst:,:].detach().numpy().squeeze())
-        rates_idx = ratess[input_idx,trnst:,:].detach().numpy().squeeze()
-        m = calc_m(rates_base, rates_idx, S_base, S)
-        sims.append(m)
-
-
-    #actual plotting
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    res = sims 
-    ax.scatter(angles[0], res[0], color=colors1[0], marker='s', label="reference")
-    ax.scatter(angles[1:], res[1:], color=colors1[1:], marker='s')
-    #ax.xaxis.set_major_formatter(tck.FormatStrFormatter('%g $^\circ$'))    
-    ax.set_xlabel(r"$\phi$ in deg")
-    ax.set_ylabel(r"Sim = $\frac{\left \| X_0 X \right \|_F}{\left \| S_0  S \right \|_F}$", size=20, labelpad=10)
-    ax.plot(angles, sims / max(sims), color='black', alpha=.6, zorder=-1)
-    #ax.axvline(45, linestyle = '-.', color='black', alpha=.5)
-    #ax.axhline(.5, linestyle = '-.', color='black', alpha=.5)
-    res = sims / max(sims)
-    ax.legend()
-    
-    return ax
-
 def lower_triangular_heatmap(covs, 
                              eps=0.2, 
                              eps_var=2.0, 
@@ -722,8 +958,8 @@ def lower_triangular_heatmap(covs,
     
     #for text color luminance-control
     import matplotlib.colors as mcolors
-    cmap1 = plt.get_cmap('PRGn')
-    cmap2 = plt.get_cmap('hot')
+    cmap1 = plt.get_cmap('hotpink_grey')
+    cmap2 = plt.get_cmap('mint_darkgreen')
 
 
     _, num_features, num_pops = covs.shape
@@ -750,9 +986,9 @@ def lower_triangular_heatmap(covs,
             axs[0,popIdx].spines["bottom"].set_visible(False)
             axs[0,popIdx].spines["left"].set_visible(False)
 
-            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='PRGn')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap=cmap1)
             norm = im.norm
-            imv = axs[0,popIdx].imshow(mask_variance, cmap='hot')
+            imv = axs[0,popIdx].imshow(mask_variance, cmap=cmap2)
             normv = imv.norm 
 
             if labels is not None:
@@ -769,18 +1005,18 @@ def lower_triangular_heatmap(covs,
             axs[0,popIdx].set_title(f'Population {popIdx+1}', pad=12.5)
         
 
-            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap='PRGn')
+            im = axs[0,popIdx].imshow(tri_mat_flattened, cmap=cmap1)
             norm = im.norm
-            imv = axs[0,popIdx].imshow(mask_variance, cmap='hot')
+            imv = axs[0,popIdx].imshow(mask_variance, cmap=cmap2)
             normv = imv.norm
 
         if put_text:
             ptile = kwargs.get('ptile', 0)
 
             for (i,j) in zip(*np.triu_indices_from(covs[:,:,popIdx])):
-                #print only most significant values:
-                if j > i and np.abs(tri_mat_flattened[i,j]) >= np.percentile(np.abs(covs[:,:, popIdx]), ptile):
+                  if j > i and np.abs(tri_mat_flattened[i,j]) >= np.percentile(np.abs(covs[:,:, popIdx]), ptile):
                     if np.abs(covs[i,j, popIdx]) > 1e-1:
+             
                         r, g, b, _ = cmap1(norm(covs[i,j,popIdx]))
                         # Compute perceived luminance (human vision weighted)
                         luminance = 0.2126*r + 0.7152*g + 0.0722*b
@@ -841,7 +1077,6 @@ def connectivity_scatter(vec1,
     from sklearn.linear_model import LinearRegression
     from utils import extract_num_pops, phiPrime
     
-
     pops = kwargs.get('pops', np.zeros(len(vec1)))
     num_pops = extract_num_pops(pops)
     prop_cycle = plt.rcParams['axes.prop_cycle']
@@ -891,6 +1126,143 @@ def connectivity_scatter(vec1,
 
 
     return ax
+
+def idx2connectivity_params(model, idxs1, idxs2):
+    conn_vecs = get_model_conn_vecs(model)
+    vecs1 = conn_vecs[idxs1, :]
+    vecs2 = conn_vecs[idxs2, :]
+    labels1 = np.array(build_labels(model))[idxs1]
+    labels2 = np.array(build_labels(model))[idxs2]
+
+    return vecs1, vecs2, labels1, labels2
+
+def connectivity_scatter_grid(
+        vecs1,
+        vecs2,
+        pops,
+        row_labels=[],
+        col_labels=[],
+        figsize=(13,13),
+        spacing=.14,
+        bins=50,
+        kde_bw="scott"
+):
+    from scipy.stats import gaussian_kde
+    nrows = vecs1.shape[0] 
+    ncols = vecs2.shape[0]
+    
+    cmap = plt.get_cmap(plt.rcParams["image.cmap"])
+    colors = cmap(np.linspace(0, 1, extract_num_pops(pops)))
+
+    hists = [dict(
+        color=colors[i],
+        alpha=.22
+        )
+        for i in range(extract_num_pops(pops))
+        ]
+
+    fig = plt.figure(figsize=figsize)
+
+    gs = GridSpec(
+        nrows + 1,
+        ncols + 1,
+        figure=fig,
+        width_ratios=[1] * ncols + [0.42],
+        height_ratios=[0.42] + [1] * nrows,
+        wspace=spacing,
+        hspace=spacing,
+    )
+
+    for i in range(nrows):
+        for j in range(ncols):
+            
+            ax = fig.add_subplot(gs[i+1, j])
+            connectivity_scatter(vecs1[i,:], vecs2[j,:], ax=ax, pops=pops)
+
+            if j != 0:
+                ax.set_yticks([])
+
+            if i != nrows - 1:
+                ax.set_xticks([])
+
+    #Add the marginals
+    
+    #top row
+    for j in range(ncols):
+
+        ax_top = fig.add_subplot(gs[0, j])
+        for p in set(pops):
+            #hists
+            ax_top.hist(vecs2[j,:][pops==p], bins=bins, density=True, **hists[p])
+
+        # KDE fits
+        grid = np.linspace(
+            min([vecs2[j,:][pops==p].min() for p in pops]),
+            max([vecs2[j,:][pops==p].max() for p in pops]),
+            300,
+        )
+
+        kdes = [gaussian_kde(vecs2[j,:][pops==p], bw_method=kde_bw) for p in set(pops)]
+        [ax_top.plot(grid, kde(grid), lw=2, color=colors[idx]) for idx, kde in enumerate(kdes)]
+        
+        if j != 0:
+            ax_top.set_yticks([])
+
+        ax_top.set_xticks([])
+
+        ax_top.xaxis.set_label_position("top")
+
+        ax_top.set_xlabel(
+                col_labels[i],
+                fontsize=15,
+                labelpad=28,
+                va="center",
+            )
+
+
+    #right border
+    for i in range(nrows):
+
+        ax_right = fig.add_subplot(gs[i+1, ncols])
+        for p in set(pops):
+            #hists
+            ax_right.hist(vecs1[i,:][pops==p], bins=bins, density=True, orientation="horizontal", **hists[p])
+
+        # KDE fits
+        grid = np.linspace(
+            min([vecs1[j,:][pops==p].min() for p in pops]),
+            max([vecs1[j,:][pops==p].max() for p in pops]),
+            300,
+        )
+
+        kdes = [gaussian_kde(vecs1[j,:][pops==p], bw_method=kde_bw) for p in set(pops)]
+        [ax_right.plot(kde(grid), grid, lw=2, color=colors[idx]) for idx, kde in enumerate(kdes)]
+
+        if i != nrows - 1:
+            ax_right.set_xticks([])
+
+        ax_right.set_yticks([])
+
+        # row labels on right
+        if row_labels is not None:
+
+            ax_right.yaxis.set_label_position("right")
+
+            ax_right.set_ylabel(
+                row_labels[i],
+                fontsize=15,
+                rotation=270,
+                labelpad=28,
+                va="center",
+            )
+
+    return fig 
+
+def connectivity_scatter_from_idxs(model, idxs1, idxs2, pops): 
+
+    #it's better to have pops seoparately passed, for sanity checks
+    vecs1, vecs2, labels1, labels2 = idx2connectivity_params(model, idxs1, idxs2)
+    connectivity_scatter_grid(vecs1, vecs2, pops, labels1, labels2)
 
 
 
